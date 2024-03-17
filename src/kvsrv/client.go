@@ -1,9 +1,11 @@
 package kvsrv
 
-import "6.5840/labrpc"
+import (
+	"6.5840/labrpc"
+	"fmt"
+)
 import "crypto/rand"
 import "math/big"
-
 
 type Clerk struct {
 	server *labrpc.ClientEnd
@@ -35,9 +37,13 @@ func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-
-	// You will have to modify this function.
-	return ""
+	args := GetArgs{key}
+	reply := GetReply{}
+	ok := ck.server.Call("KVServer.Get", &args, &reply)
+	if !ok {
+		fmt.Printf("Get key %v error\n", key)
+	}
+	return reply.Value
 }
 
 // shared by Put and Append.
@@ -50,7 +56,13 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) string {
 	// You will have to modify this function.
-	return ""
+	args := PutAppendArgs{Key: key, Value: value}
+	reply := PutAppendReply{} // 大坑：这里一开始不小心赋值了value，导致服务器修改不了已经赋值的值，找了半天
+	ok := ck.server.Call("KVServer."+op, &args, &reply)
+	if !ok {
+		fmt.Printf("%v key %v error\n", op, key)
+	}
+	return reply.Value
 }
 
 func (ck *Clerk) Put(key string, value string) {
@@ -59,5 +71,6 @@ func (ck *Clerk) Put(key string, value string) {
 
 // Append value to key's value and return that value
 func (ck *Clerk) Append(key string, value string) string {
-	return ck.PutAppend(key, value, "Append")
+	str := ck.PutAppend(key, value, "Append")
+	return str
 }
