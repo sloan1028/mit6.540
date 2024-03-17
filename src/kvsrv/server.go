@@ -1,7 +1,6 @@
 package kvsrv
 
 import (
-	"fmt"
 	"log"
 	"sync"
 )
@@ -48,29 +47,32 @@ func (kv *KVServer) AppendValue(key, value string) string {
 	return str
 }
 
+// get不关心是否重复调用的，没有调到一直调用就是了
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
-	if value, isDone := kv.CheckOpIsDone(args.RpcId); isDone {
-		reply.Value = value
-		return
-	}
+	/*
+		if value, isDone := kv.CheckOpIsDone(args.RpcId); isDone {
+			reply.Value = value
+			return
+		}
+	*/
 	key := args.Key
 	reply.Value = kv.GetValue(key)
-
-	kv.DoCacheAndRelease(args.ClerkId, args.RpcId, reply.Value)
+	//kv.DoCacheAndRelease(args.ClerkId, args.RpcId, reply.Value)
 }
 
+// put只关心是不是调用到了，不关心返回值，所以不用存doneCache
 func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
 	if value, isDone := kv.CheckOpIsDone(args.RpcId); isDone {
 		reply.Value = value
 		return
 	}
 	kv.PutValue(args.Key, args.Value)
 	reply.Value = args.Value
-	kv.DoCacheAndRelease(args.ClerkId, args.RpcId, reply.Value)
+	kv.doneCache.Store(args.RpcId, "kfc") //存下哈希表知道这个操作完成了就行了
+	//kv.DoCacheAndRelease(args.ClerkId, args.RpcId, reply.Value)
 }
 
+// append关心是不是调用到了，关心返回值，所以存doneCache
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	if value, isDone := kv.CheckOpIsDone(args.RpcId); isDone {
@@ -95,7 +97,7 @@ func (kv *KVServer) CheckOpIsDone(rpcId int64) (string, bool) {
 func (kv *KVServer) DoCacheAndRelease(clerkId, rpcId int64, value string) {
 	preRpcId, exist := kv.clerkId2rpcId.Load(clerkId)
 	if exist {
-		fmt.Println("DoDelete")
+		//fmt.Println("DoDelete")
 		kv.doneCache.Delete(preRpcId)
 	}
 	kv.clerkId2rpcId.Store(clerkId, rpcId)
