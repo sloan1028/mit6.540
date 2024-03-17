@@ -2,13 +2,13 @@ package kvsrv
 
 import (
 	"6.5840/labrpc"
-	"fmt"
 )
 import "crypto/rand"
 import "math/big"
 
 type Clerk struct {
-	server *labrpc.ClientEnd
+	server  *labrpc.ClientEnd
+	clerkId int64
 	// You will have to modify this struct.
 }
 
@@ -22,6 +22,7 @@ func nrand() int64 {
 func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.server = server
+	ck.clerkId = nrand()
 	// You'll have to add code here.
 	return ck
 }
@@ -37,11 +38,11 @@ func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{key}
-	reply := GetReply{}
-	ok := ck.server.Call("KVServer.Get", &args, &reply)
-	if !ok {
-		fmt.Printf("Get key %v error\n", key)
+	rpcId := nrand()
+	args := GetArgs{key, rpcId, ck.clerkId}
+	var reply GetReply
+	for !ck.server.Call("KVServer.Get", &args, &reply) {
+		reply = GetReply{}
 	}
 	return reply.Value
 }
@@ -56,11 +57,14 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) string {
 	// You will have to modify this function.
-	args := PutAppendArgs{Key: key, Value: value}
-	reply := PutAppendReply{} // 大坑：这里一开始不小心赋值了value，导致服务器修改不了已经赋值的值，找了半天
-	ok := ck.server.Call("KVServer."+op, &args, &reply)
-	if !ok {
-		fmt.Printf("%v key %v error\n", op, key)
+	rpcId := nrand()
+	args := PutAppendArgs{key, value, rpcId, ck.clerkId}
+	var reply PutAppendReply
+	for !ck.server.Call("KVServer."+op, &args, &reply) {
+		//fmt.Printf("%v ClerkId %v\n", op, clerkId)
+		reply = PutAppendReply{}
+		// 大坑：这里一开始不小心赋值了value，导致服务器修改不了已经赋值的值，找了半天
+		// 且每次尝试发送RPC都应该把reply值清空
 	}
 	return reply.Value
 }
