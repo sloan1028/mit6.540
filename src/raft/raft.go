@@ -295,6 +295,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//"Term %d, lenLogs: %d\n", rf.me, args.LeaderId, args.Term, len(args.Entries))
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	//DPrintf("-------AppendEntries: %d term: %d from %v\n", rf.me, rf.currentTerm, args)
 	reply.Term = rf.currentTerm
 	// 1.Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
@@ -336,9 +337,27 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.currentTerm = args.Term
 }
 
-func (rf *Raft) SendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok
+func (rf *Raft) SendAppendEntries(server int, args *AppendEntriesArgs) {
+	//DPrintf("%d in Term %d go Send to %d\n", rf.me, rf.currentTerm, idx)
+	reply := AppendEntriesReply{}
+	if rf.peers[server].Call("Raft.AppendEntries", args, &reply) {
+		rf.mu.Lock()
+		if reply.Success {
+			rf.nextIndex[server] = len(rf.log)
+			rf.matchIndex[server] = len(rf.log) - 1
+			rf.LeaderRefreshCommitIndex()
+			rf.CheckApplyToStateMachine()
+		} else {
+			rf.nextIndex[server]--
+			if reply.Term > rf.currentTerm {
+				rf.currentTerm = reply.Term
+				rf.SetStateType(Follower)
+				rf.votedFor = -1
+			}
+		}
+		rf.mu.Unlock()
+	}
+	return
 }
 
 func (rf *Raft) GoSendAppendEntries() {
@@ -348,47 +367,36 @@ func (rf *Raft) GoSendAppendEntries() {
 			if index == rf.me {
 				continue
 			}
-			go func(idx int) {
-				rf.mu.Lock()
-				nextIndex := rf.nextIndex[idx]
-				logEntries := make([]Log, 0)
-				for i := nextIndex; i < len(rf.log); i++ {
-					logEntries = append(logEntries, rf.log[i])
-				}
-				prevLogIndex, prevLogTerm := 0, 0
-				prevLogIndex = rf.log[nextIndex-1].ApplyMsg.CommandIndex
-				prevLogTerm = rf.log[nextIndex-1].Term
-				args := AppendEntriesArgs{
-					Term:         rf.currentTerm,
-					LeaderId:     rf.me,
-					PrevLogIndex: prevLogIndex,
-					PrevLogTerm:  prevLogTerm,
-					Entries:      logEntries,
-					LeaderCommit: rf.commitIndex,
-				}
-				//DPrintf("%d Go Send AppendEntries %v\n", rf.me, args)
-				rf.mu.Unlock()
-				reply := AppendEntriesReply{}
-				if rf.SendAppendEntries(idx, &args, &reply) {
-					rf.mu.Lock()
-					if reply.Success {
-						rf.nextIndex[idx] = len(rf.log)
-						rf.matchIndex[idx] = len(rf.log) - 1
-						rf.LeaderRefreshCommitIndex()
-						rf.CheckApplyToStateMachine()
-					} else {
-						rf.nextIndex[idx]--
-						if reply.Term > rf.currentTerm {
-							rf.currentTerm = reply.Term
-							rf.SetStateType(Follower)
-							rf.votedFor = -1
-						}
-					}
-					rf.mu.Unlock()
-				}
-			}(index)
+			if rf.GetStateType() != Leader {
+				return
+			}
+			rf.mu.Lock()
+			nextIndex := rf.nextIndex[index]
+			logEntries := make([]Log, 0)
+			for i := nextIndex; i < len(rf.log); i++ {
+				logEntries = append(logEntries, rf.log[i])
+			}
+			prevLogIndex, prevLogTerm := 0, 0
+			prevLogIndex = rf.log[nextIndex-1].ApplyMsg.CommandIndex
+			prevLogTerm = rf.log[nextIndex-1].Term
+			args := AppendEntriesArgs{
+				Term:         rf.currentTerm,
+				LeaderId:     rf.me,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				Entries:      logEntries,
+				LeaderCommit: rf.commitIndex,
+			}
+			rf.mu.Unlock()
+			// 这里发现一种偶现情况，来自3b的TestBackup3B
+			// 如果把args的生成丢到协程里面做时
+			// 当一个落后&临时断线的Leader复活了，给其他peers发送appendRPC时
+			// 一个遍历的前方的rpc已经回包告诉这个落后Leader落后了，Leader会修改Term和状态
+			// 此时其他协程其实并不知道Leader已经变成follower了，而且还会读到这个节点获得的最新Term
+			// 此时发送的rpc会被检查并通过，因为term已经变成正常的了
+			go rf.SendAppendEntries(index, &args)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -476,7 +484,7 @@ func (rf *Raft) ticker() {
 
 		// Your code here (3A)
 		// Check if a leader election should be started.
-		outTime := 1000 + (rand.Int63() % 600)
+		outTime := 500 + (rand.Int63() % 300)
 		if rf.GetStateType() != Leader && rf.GetDelayTime() > outTime { // 如果发现超时，还没收到leader发来的心跳，那开启领导选举
 			rf.SetStateType(Candidate)
 			rf.mu.Lock()
@@ -584,7 +592,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		matchIndex:  make([]int, len(peers)),
 		applyCh:     applyCh,
 	}
-	//todo rf.log[0].Term = 1
 
 	// Your initialization code here (3A, 3B, 3C).
 
