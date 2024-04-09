@@ -130,15 +130,13 @@ func (rf *Raft) AddDelayTime(t int64) {
 // Lab只会有一个snapShot在首位，所以没有问题
 // 而且这样索引到的速度是O(1)
 func (rf *Raft) getLogOffset() int {
-	if len(rf.log) > 1 {
-		if rf.log[1].ApplyMsg.CommandValid {
-			return rf.log[1].ApplyMsg.CommandIndex - 1
+	if len(rf.log) > 0 {
+		if rf.log[0].ApplyMsg.CommandValid {
+			return rf.log[0].ApplyMsg.CommandIndex
 		}
-		if rf.log[1].ApplyMsg.SnapshotValid {
-			return rf.log[1].ApplyMsg.SnapshotIndex - 1
+		if rf.log[0].ApplyMsg.SnapshotValid {
+			return rf.log[0].ApplyMsg.SnapshotIndex
 		}
-	} else if len(rf.log) == 1 {
-		return 0
 	}
 	log2.Fatalf("%d getLogOffset error\n", rf.me)
 	return -10086
@@ -168,6 +166,20 @@ func (rf *Raft) getLastLogTerm() int {
 	return -10086
 }
 
+func (rf *Raft) getLogTerm(logIndex int) int {
+	offset := rf.getLogOffset()
+	if logIndex-offset > 0 {
+		return rf.log[logIndex-offset].Term
+	} else if logIndex-offset == 0 {
+		if rf.log[0].ApplyMsg.SnapshotValid {
+			return rf.log[0].ApplyMsg.SnapshotTerm
+		}
+		return rf.log[0].Term
+	}
+	log2.Fatalf("getLogTerm Error\n")
+	return -10086
+}
+
 func (rf *Raft) getLog(logIndex int) Log {
 	offset := rf.getLogOffset()
 	return rf.log[logIndex-offset]
@@ -184,7 +196,6 @@ func (rf *Raft) GetState() (int, bool) {
 	defer rf.mu.Unlock()
 	term = rf.currentTerm
 	isleader = rf.GetStateType() == Leader
-	//DPrintf("Id: %d, IsLeader: %v Term: %d\n", rf.me, isleader, rf.currentTerm)
 	return term, isleader
 }
 
@@ -203,8 +214,13 @@ func (rf *Raft) persist() {
 	e.Encode(rf.votedFor)
 	saveLog := rf.log[1:]
 	e.Encode(saveLog)
-	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+	e.Encode(rf.log[0].ApplyMsg.SnapshotTerm)
+	e.Encode(rf.log[0].ApplyMsg.SnapshotIndex)
+	raftState := w.Bytes()
+
+	//DPrintf("rf: %d, Save State: SnapshotTerm %d, SnapshotIndex %d snapshotSize %d",
+	//rf.me, rf.log[0].ApplyMsg.SnapshotTerm, rf.log[0].ApplyMsg.SnapshotIndex, len(rf.log[0].ApplyMsg.Snapshot))
+	rf.persister.Save(raftState, rf.log[0].ApplyMsg.Snapshot)
 }
 
 // restore previously persisted state.
@@ -218,14 +234,28 @@ func (rf *Raft) readPersist(data []byte) {
 	var curTerm int
 	var voteFor int
 	var log []Log
-	if d.Decode(&curTerm) != nil || d.Decode(&voteFor) != nil || d.Decode(&log) != nil {
+	var SnapshotTerm int
+	var SnapshotIndex int
+	if d.Decode(&curTerm) != nil || d.Decode(&voteFor) != nil || d.Decode(&log) != nil ||
+		d.Decode(&SnapshotTerm) != nil || d.Decode(&SnapshotIndex) != nil {
 		//DPrintf("%v Decode error %v\n", d, data)
 	} else {
 		rf.mu.Lock()
 		rf.currentTerm = curTerm
 		rf.votedFor = voteFor
 		rf.log = append(rf.log, log...)
-		//DPrintf("%v Decode success %v %v %v\n", rf.me, curTerm, voteFor, log)
+		if SnapshotIndex != 0 {
+			rf.log[0].ApplyMsg.CommandValid = false
+			rf.log[0].ApplyMsg.SnapshotValid = true
+			rf.log[0].ApplyMsg.SnapshotIndex = SnapshotIndex
+			rf.log[0].ApplyMsg.SnapshotTerm = SnapshotTerm
+			// 这里重开时要把快照拉回来，否则下次再存的时候，这里是空的直接把快照弄没了。Bug From 3D最后一个TestSnapshotInit3D
+			rf.log[0].ApplyMsg.Snapshot = rf.persister.ReadSnapshot()
+			rf.lastApplied = SnapshotIndex
+			rf.commitIndex = SnapshotIndex
+		}
+		//DPrintf("%v Decode success snapshotTerm: %d snapshotIndex: %d"+
+		//"LastApplied: %d\n", rf.me, SnapshotTerm, SnapshotIndex, rf.lastApplied)
 		rf.mu.Unlock()
 	}
 }
@@ -234,49 +264,162 @@ func (rf *Raft) readPersist(data []byte) {
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
+// 注：这里的snapshot包含的应该就是一个完整的ApplyMsg结构的信息了，所以我们不需要对他再进行改动
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (3D).
-	/*
-		go func() {
-			rf.mu.Lock() //为什么我在这里加一个锁，就会导致程序阻塞呢
-			defer rf.mu.Unlock()
-			offset := rf.getLogOffset()
-			term := rf.log[index-offset].Term //todo 这里需不需要-offset？
-			w := new(bytes.Buffer)
-			e := labgob.NewEncoder(w)
-			saveLog := rf.log[1:]
-			oldSize := len(rf.log)
-			e.Encode(saveLog)
-			oldRaftState := w.Bytes()
-			logs := make([]Log, 2)
-			logs[1] = Log{
-				Term: term,
-				ApplyMsg: ApplyMsg{
-					SnapshotValid: true,
-					Snapshot:      snapshot,
-					SnapshotIndex: index,
-					SnapshotTerm:  term,
-				}}
-			idx := 1
-			for idx < len(rf.log) {
-				applyMsg := rf.log[idx].ApplyMsg
-				if applyMsg.CommandValid && applyMsg.CommandIndex <= index {
-					idx++
-				} else if applyMsg.SnapshotValid && applyMsg.SnapshotIndex <= index {
-					idx++
-				} else {
-					break
-				}
+	go func() {
+		rf.mu.Lock() //为什么我在这里加一个锁，就会导致程序阻塞呢
+		defer rf.mu.Unlock()
+		offset := rf.getLogOffset()
+		if index-offset <= 0 {
+			return
+		}
+		term := rf.log[index-offset].Term
+		//oldSize := len(rf.log)
+		newLog := make([]Log, 1)
+		newLog[0] = Log{
+			Term: term,
+			ApplyMsg: ApplyMsg{
+				SnapshotValid: true,
+				SnapshotIndex: index,
+				SnapshotTerm:  term,
+				Snapshot:      snapshot,
+			}}
+		idx := 1
+		for idx < len(rf.log) {
+			applyMsg := rf.log[idx].ApplyMsg
+			if applyMsg.CommandValid && applyMsg.CommandIndex <= index {
+				idx++
+			} else if applyMsg.SnapshotValid && applyMsg.SnapshotIndex <= index {
+				idx++
+			} else {
+				break
 			}
-			stillNeedLogs := rf.log[idx:]
-			logs = append(logs, stillNeedLogs...)
-			rf.log = logs
-			DPrintf("----- %d Do SnapShot index: %d ,LogSize from %d to %d, LogLen from %d to %d\n",
-				rf.me, index, len(oldRaftState), len(snapshot), oldSize, len(rf.log))
-			rf.commitIndex -= index + 1
+		}
+		stillNeedLogs := rf.log[idx:]
+		newLog = append(newLog, stillNeedLogs...)
+		rf.log = newLog
+		//DPrintf("----- %d Do SnapShot index: %d, LogLen to %d, lastIndex: %d, lastTerm: %d\n",
+		//rf.me, index, len(rf.log), index, term)
+		rf.persist()
+	}()
+}
+
+type InstallSnapshotArgs struct {
+	Term              int
+	LeaderId          int
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Offset            int //本lab中不需要用
+	Data              []byte
+	Done              bool //本lab中不需要用
+}
+
+type InstallSnapshotReply struct {
+	Term int
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	//DPrintf("%d Receive InstallSnapshot From %d, LastIndex: %d LastTerm: %d\n",
+	//rf.me, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
+	reply.Term = rf.currentTerm
+	// 1.Reply immediately if term < currentTerm
+	if args.Term < rf.currentTerm {
+		return
+	}
+	if rf.GetStateType() != Follower && args.Term >= rf.currentTerm {
+		rf.SetStateType(Follower)
+		rf.votedFor = -1
+		rf.persist()
+	}
+	rf.currentTerm = args.Term
+	rf.ClearDelayTime() // 清空delayTime
+	// 注意这个清空在确认对方是Leader后就要清空
+	// 因为下面第二步如果有很多日志不一致，会花很多时间来同步信息，会把领导选举卡到超时
+
+	// 2. Save snapshot file, discard any existing or partial snapshot with a smaller index
+	if rf.log[0].ApplyMsg.CommandValid ||
+		(rf.log[0].ApplyMsg.SnapshotValid && rf.log[0].ApplyMsg.SnapshotIndex < args.LastIncludedIndex) {
+		newSnapshot := ApplyMsg{
+			SnapshotValid: true,
+			SnapshotIndex: args.LastIncludedIndex,
+			SnapshotTerm:  args.LastIncludedTerm,
+			Snapshot:      args.Data,
+		}
+		newApplyMsg := Log{
+			ApplyMsg: newSnapshot,
+			Term:     args.LastIncludedTerm,
+		}
+		rf.log[0] = newApplyMsg
+		rf.persist()
+	}
+	// 3. If existing log entry has same index and term as snapshot’s last included entry,
+	// retain log entries following it and reply
+	for i := 1; i < len(rf.log); i++ {
+		log := rf.log[i]
+		if log.ApplyMsg.CommandIndex == args.LastIncludedIndex && log.Term == args.LastIncludedTerm {
+			saveLog := rf.log[i+1:]
+			rf.log = rf.log[:1]
+			rf.log = append(rf.log, saveLog...)
+			//rf.commitIndex = args.LastIncludedIndex
 			rf.persist()
-		}()
-	*/
+			//DPrintf("retain log entries %d , lastIndex: %d, lastTerm: %d, and return back\n",
+			//len(rf.log), rf.getLastLogIndex(), rf.getLastLogTerm())
+			return
+		}
+	}
+	// 4. Discard the entire log
+	rf.log = rf.log[:1]
+	rf.persist()
+
+	// 5.Reset state machine using snapshot contents
+	//DPrintf("Reset state machine %d , lastIndex: %d, lastTerm: %d, and return back\n",
+	//len(rf.log), rf.getLastLogIndex(), rf.getLastLogTerm())
+	rf.commitIndex = args.LastIncludedIndex
+	rf.lastApplied = args.LastIncludedIndex
+	apm := ApplyMsg{
+		SnapshotValid: true,
+		SnapshotIndex: args.LastIncludedIndex,
+		SnapshotTerm:  args.LastIncludedTerm,
+		Snapshot:      args.Data,
+	}
+	//DPrintf("rf %d Apply snapshot size: %d\n", rf.me, len(args.Data))
+	rf.applyCh <- apm
+	rf.persist()
+}
+
+func (rf *Raft) GoSendInstallSnapshot(peer int) {
+	if rf.GetStateType() != Leader {
+		return
+	}
+	rf.mu.Lock()
+	args := InstallSnapshotArgs{
+		Term:              rf.currentTerm,
+		LeaderId:          rf.me,
+		LastIncludedIndex: rf.log[0].ApplyMsg.SnapshotIndex,
+		LastIncludedTerm:  rf.log[0].ApplyMsg.SnapshotTerm,
+		Data:              rf.persister.ReadSnapshot(),
+	}
+	applySnapshotIndex := rf.log[0].ApplyMsg.SnapshotIndex
+	//DPrintf("%d GoSendInstallSnapshot: to %d\n", rf.me, peer)
+	rf.mu.Unlock()
+	reply := InstallSnapshotReply{}
+	if rf.peers[peer].Call("Raft.InstallSnapshot", &args, &reply) {
+		rf.mu.Lock()
+		rf.nextIndex[peer] = applySnapshotIndex + 1
+		rf.matchIndex[peer] = applySnapshotIndex
+		if reply.Term > rf.currentTerm {
+			rf.currentTerm = reply.Term
+			rf.SetStateType(Follower)
+			rf.votedFor = -1
+			rf.persist()
+		}
+		rf.mu.Unlock()
+	}
+	return
+
 }
 
 // 注意一下参数属性都要大写
@@ -392,7 +535,7 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	//DPrintf("%d Recevive AppendEntries From %d, "+
-	//	"Term %d, lenLogs: %d\n", rf.me, args.LeaderId, args.Term, len(args.Entries))
+	//"Term %d, lenLogs: %d\n", rf.me, args.LeaderId, args.Term, len(args.Entries))
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//DPrintf("-------AppendEntries: %d term: %d from %v\n", rf.me, rf.currentTerm, args)
@@ -413,20 +556,31 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 因为下面第二步如果有很多日志不一致，会花很多时间来同步信息，会把领导选举卡到超时
 	offset := rf.getLogOffset()
 	// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
-	if args.PrevLogIndex > rf.getLastLogIndex() || rf.log[args.PrevLogIndex-offset].Term != args.PrevLogTerm {
+	if args.PrevLogIndex > rf.getLastLogIndex() || rf.getLogTerm(args.PrevLogIndex) != args.PrevLogTerm {
 		reply.Success = false
 		if args.PrevLogIndex > rf.getLastLogIndex() {
-			//DPrintf("%d 太短了\n", rf.me)
+			//DPrintf("%d 太短了, back Term: -1, confictIndex: %d\n", rf.me, rf.getLastLogIndex())
 			reply.ConflictTerm = -1
 			reply.ConflictIndex = rf.getLastLogIndex()
 		} else {
-			reply.ConflictTerm = rf.log[args.PrevLogIndex-offset].Term
+			if args.PrevLogIndex-offset > 0 {
+				reply.ConflictTerm = rf.log[args.PrevLogIndex-offset].Term
+			} else {
+				if rf.log[0].ApplyMsg.CommandValid {
+					reply.ConflictTerm = rf.log[0].Term
+				}
+				if rf.log[0].ApplyMsg.SnapshotValid {
+					reply.ConflictTerm = rf.log[0].ApplyMsg.SnapshotTerm
+				}
+			}
 			index := args.PrevLogIndex - 1
 			//DPrintf("args.PrevLogIndex %d \n", args.PrevLogIndex)
-			for index-offset >= 1 && rf.log[index-offset].Term == reply.ConflictTerm {
+			for index-offset >= 0 && rf.log[index-offset].Term == reply.ConflictTerm {
 				index--
 			}
-			reply.ConflictIndex = index //还回去的时候要加上offset
+			reply.ConflictIndex = index
+			//DPrintf("id: %d args.PrevLogIndex: %d, rf.getLastLogIndex(): %d, offset: %d",
+			//rf.me, args.PrevLogIndex, rf.getLastLogIndex(), rf.getLogOffset())
 			//DPrintf("%d 切割到了 term: %d index %d\n", rf.me, reply.ConflictTerm, reply.ConflictIndex)
 		}
 
@@ -474,18 +628,23 @@ func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntrie
 			rf.LeaderRefreshCommitIndex()
 			rf.CheckApplyToStateMachine()
 		} else {
+			//DPrintf("Id: %d, ConflictTerm: %d, ConflictIndex: %d\n", server, reply.ConflictTerm, reply.ConflictIndex)
 			if rf.nextIndex[server] > 1 {
 				if reply.ConflictTerm == -1 {
 					rf.nextIndex[server] = reply.ConflictIndex + 1
 				} else {
 					rf.nextIndex[server] = reply.ConflictIndex + 1
 					conflictTerm := reply.ConflictTerm
+					//DPrintf("lenLog: %d, snapTerm:%d snapIndex%d\n",
+					//len(rf.log), rf.log[0].ApplyMsg.SnapshotTerm, rf.log[0].ApplyMsg.SnapshotIndex)
 					for i := len(rf.log) - 1; i >= 1; i-- {
+						//DPrintf("log[%d].Term == %d\n", i, rf.log[i].Term)
 						if rf.log[i].Term == conflictTerm {
-							rf.nextIndex[server] = i
+							rf.nextIndex[server] = rf.log[i].ApplyMsg.CommandIndex
 							break
 						}
 					}
+					//DPrintf("rf.nextIndex[%d] change to %d\n", server, reply.ConflictIndex+1)
 				}
 				//DPrintf("id: %d Append Entries 不匹配 nextIndex: %d\n", server, rf.nextIndex[server])
 			}
@@ -516,6 +675,14 @@ func (rf *Raft) GoSendAppendEntries() {
 			nextIndex := rf.nextIndex[peer]
 			logEntries := make([]Log, 0)
 			//DPrintf("nextIndex: %d, lastLogIndex: %d, offset: %d\n", nextIndex, rf.getLastLogIndex(), offset)
+			if nextIndex <= offset {
+				// 这里如果nextIndex还很小，而lastIndex和offset已经拉高了，
+				// 说明nextIndex已经在快照中了，需要InstallSnapshotRPC来协助了
+				// DPrintf("%d GoSendInstallSnapshot: to %d\n", rf.me, peer)
+				go rf.GoSendInstallSnapshot(peer)
+				rf.mu.Unlock()
+				continue
+			}
 			for i := nextIndex; i <= rf.getLastLogIndex(); i++ {
 				logEntries = append(logEntries, rf.log[i-offset])
 			}
@@ -580,7 +747,7 @@ func (rf *Raft) CheckApplyToStateMachine() {
 	offset := rf.getLogOffset()
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
 		rf.log[i-offset].ApplyMsg.CommandValid = true
-		//DPrintf("%d apply index %d command %v to state machine\n", rf.me, i, rf.log[i].ApplyMsg.Command)
+		//DPrintf("%d apply index %d command %v to state machine\n", rf.me, i, rf.log[i-offset].ApplyMsg.Command)
 		rf.applyCh <- rf.log[i-offset].ApplyMsg
 		rf.lastApplied = i
 	}
@@ -632,7 +799,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
-	//DPrintf("Id: %d DIE!!!!!!!!!!\n", rf.me)
 }
 
 func (rf *Raft) killed() bool {
