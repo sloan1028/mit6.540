@@ -264,7 +264,6 @@ func (rf *Raft) readPersist(data []byte) {
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
-// 注：这里的snapshot包含的应该就是一个完整的ApplyMsg结构的信息了，所以我们不需要对他再进行改动
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (3D).
 	go func() {
@@ -275,7 +274,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 			return
 		}
 		term := rf.log[index-offset].Term
-		//oldSize := len(rf.log)
 		newLog := make([]Log, 1)
 		newLog[0] = Log{
 			Term: term,
@@ -339,6 +337,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	// 注意这个清空在确认对方是Leader后就要清空
 	// 因为下面第二步如果有很多日志不一致，会花很多时间来同步信息，会把领导选举卡到超时
 
+	oldOffset := rf.getLogOffset()
 	// 2. Save snapshot file, discard any existing or partial snapshot with a smaller index
 	if rf.log[0].ApplyMsg.CommandValid ||
 		(rf.log[0].ApplyMsg.SnapshotValid && rf.log[0].ApplyMsg.SnapshotIndex < args.LastIncludedIndex) {
@@ -360,13 +359,26 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	for i := 1; i < len(rf.log); i++ {
 		log := rf.log[i]
 		if log.ApplyMsg.CommandIndex == args.LastIncludedIndex && log.Term == args.LastIncludedTerm {
+
+			// 发现保留的log带有未提交的日志的话，也要把这些日志提交完整，否则后面的提交顺序会乱掉
+			for j := rf.lastApplied + 1; j <= args.LastIncludedIndex; j++ {
+				//DPrintf("---Install Snapshot"+
+				//"%d apply index %d command %v to state machine, offset: %d\n",
+				//rf.me, j, rf.log[j-oldOffset].ApplyMsg.Command, oldOffset)
+				rf.applyCh <- rf.log[j-oldOffset].ApplyMsg
+			}
+			rf.lastApplied = args.LastIncludedIndex
+			rf.commitIndex = args.LastIncludedIndex
+
 			saveLog := rf.log[i+1:]
 			rf.log = rf.log[:1]
 			rf.log = append(rf.log, saveLog...)
-			//rf.commitIndex = args.LastIncludedIndex
+
+			//DPrintf("retain log entries size: %d , lastIndex: %d, lastTerm: %d, rf.commitIndex: %d"+
+			//", args.LstIndecludeIndex: %d"+
+			//"and return back\n",
+			//len(saveLog), rf.getLastLogIndex(), rf.getLastLogTerm(), rf.commitIndex, args.LastIncludedIndex)
 			rf.persist()
-			//DPrintf("retain log entries %d , lastIndex: %d, lastTerm: %d, and return back\n",
-			//len(rf.log), rf.getLastLogIndex(), rf.getLastLogTerm())
 			return
 		}
 	}
@@ -563,16 +575,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			reply.ConflictTerm = -1
 			reply.ConflictIndex = rf.getLastLogIndex()
 		} else {
-			if args.PrevLogIndex-offset > 0 {
-				reply.ConflictTerm = rf.log[args.PrevLogIndex-offset].Term
-			} else {
-				if rf.log[0].ApplyMsg.CommandValid {
-					reply.ConflictTerm = rf.log[0].Term
-				}
-				if rf.log[0].ApplyMsg.SnapshotValid {
-					reply.ConflictTerm = rf.log[0].ApplyMsg.SnapshotTerm
-				}
-			}
+			reply.ConflictTerm = rf.getLogTerm(args.PrevLogIndex)
 			index := args.PrevLogIndex - 1
 			//DPrintf("args.PrevLogIndex %d \n", args.PrevLogIndex)
 			for index-offset >= 0 && rf.log[index-offset].Term == reply.ConflictTerm {
@@ -606,6 +609,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//DPrintf("id: %d Log Entries: %v\n", rf.me, rf.log)
 	// 5.If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIndex())
+	//DPrintf("%d commitIndex: %d, from min(leaderCommit: %d, lastLogIndex: %d)\n", rf.me, rf.commitIndex,
+	//args.LeaderCommit, rf.getLastLogIndex())
 	rf.CheckApplyToStateMachine()
 	reply.Success = true
 	rf.currentTerm = args.Term
@@ -746,7 +751,12 @@ func (rf *Raft) LeaderRefreshCommitIndex() {
 func (rf *Raft) CheckApplyToStateMachine() {
 	offset := rf.getLogOffset()
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-		rf.log[i-offset].ApplyMsg.CommandValid = true
+		if i-offset <= 0 {
+			//DPrintf("%d 发现一个i-offset<=0, i: %d, offset: %d, "+
+			//"commitIndex: %d, lenLog: %d\n", rf.me, i, offset, rf.commitIndex, len(rf.log))
+			continue
+		}
+		//rf.log[i-offset].ApplyMsg.CommandValid = true
 		//DPrintf("%d apply index %d command %v to state machine\n", rf.me, i, rf.log[i-offset].ApplyMsg.Command)
 		rf.applyCh <- rf.log[i-offset].ApplyMsg
 		rf.lastApplied = i
