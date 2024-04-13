@@ -5,6 +5,7 @@ import (
 	"6.5840/porcupine"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"runtime"
 	"strconv"
@@ -457,7 +458,7 @@ func TestMemAppend2(t *testing.T) {
 	cfg.end()
 }
 
-func TestMemPutMany(t *testing.T) {
+func TestMemPutManyClients(t *testing.T) {
 	const (
 		NCLIENT = 100_000
 		MEM     = 1000
@@ -476,7 +477,7 @@ func TestMemPutMany(t *testing.T) {
 	// allow threads started by labrpc to start
 	time.Sleep(1 * time.Second)
 
-	cfg.begin("Test: memory use many puts")
+	cfg.begin("Test: memory use many put clients")
 
 	runtime.GC()
 	runtime.GC()
@@ -507,7 +508,7 @@ func TestMemPutMany(t *testing.T) {
 	cfg.end()
 }
 
-func TestMemGetMany(t *testing.T) {
+func TestMemGetManyClients(t *testing.T) {
 	const (
 		NCLIENT = 100_000
 	)
@@ -515,7 +516,7 @@ func TestMemGetMany(t *testing.T) {
 	cfg := make_config(t, false)
 	defer cfg.cleanup()
 
-	cfg.begin("Test: memory use many gets")
+	cfg.begin("Test: memory use many get client")
 
 	ck := cfg.makeClient()
 	ck.Put("0", "")
@@ -557,5 +558,48 @@ func TestMemGetMany(t *testing.T) {
 		cfg.deleteClient(ck)
 	}
 
+	cfg.end()
+}
+
+func TestMemManyAppends(t *testing.T) {
+	const (
+		N   = 1000
+		MEM = 1000
+	)
+
+	cfg := make_config(t, false)
+	defer cfg.cleanup()
+
+	cfg.begin("Test: memory use many appends")
+
+	ck := cfg.makeClient()
+	rdVal := randValue(MEM)
+
+	runtime.GC()
+	runtime.GC()
+
+	var st runtime.MemStats
+	runtime.ReadMemStats(&st)
+	m0 := st.HeapAlloc
+
+	for i := 0; i < N; i++ {
+		ck.Append("k", rdVal)
+	}
+
+	runtime.GC()
+
+	time.Sleep(1 * time.Second)
+
+	runtime.GC()
+
+	runtime.ReadMemStats(&st)
+	m1 := st.HeapAlloc
+	if m1 >= 3*MEM*N {
+		t.Fatalf("error: server using too much memory m0 %d m1 %d\n", m0, m1)
+	}
+
+	log.Printf("m0 %d m1 %d\n", m0, m1)
+
+	cfg.deleteClient(ck)
 	cfg.end()
 }
