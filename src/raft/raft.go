@@ -668,59 +668,62 @@ func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntrie
 func (rf *Raft) GoSendAppendEntries() {
 	for rf.killed() == false && rf.GetStateType() == Leader {
 		// 如果服务器是leader，不停的发送包给所有的follower
-		for peer, _ := range rf.peers {
-			if peer == rf.me {
-				continue
-			}
-			if rf.GetStateType() != Leader {
-				return
-			}
-			rf.mu.Lock()
-			offset := rf.getLogOffset()
-			nextIndex := rf.nextIndex[peer]
-			logEntries := make([]Log, 0)
-			//DPrintf("nextIndex: %d, lastLogIndex: %d, offset: %d\n", nextIndex, rf.getLastLogIndex(), offset)
-			if nextIndex <= offset {
-				// 这里如果nextIndex还很小，而lastIndex和offset已经拉高了，
-				// 说明nextIndex已经在快照中了，需要InstallSnapshotRPC来协助了
-				// DPrintf("%d GoSendInstallSnapshot: to %d\n", rf.me, peer)
-				go rf.GoSendInstallSnapshot(peer)
-				rf.mu.Unlock()
-				continue
-			}
-			for i := nextIndex; i <= rf.getLastLogIndex(); i++ {
-				logEntries = append(logEntries, rf.log[i-offset])
-			}
-			prevLogIndex, prevLogTerm := 0, 0
-			prevLog := rf.getLog(nextIndex - 1)
-			if prevLog.ApplyMsg.CommandValid {
-				prevLogIndex = rf.log[nextIndex-1-offset].ApplyMsg.CommandIndex
-				prevLogTerm = rf.log[nextIndex-1-offset].Term
-			} else if prevLog.ApplyMsg.SnapshotValid {
-				prevLogIndex = rf.log[nextIndex-1-offset].ApplyMsg.SnapshotIndex
-				prevLogTerm = rf.log[nextIndex-1-offset].ApplyMsg.SnapshotTerm
-			} else {
-				log2.Fatalf("%d Find Error\n", rf.me)
-			}
-			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  prevLogTerm,
-				Entries:      logEntries,
-				LeaderCommit: rf.commitIndex,
-			}
-			targetLogIndex := rf.getLastLogIndex() + 1
-			rf.mu.Unlock()
-			// 这里发现一种偶现情况，来自3b的TestBackup3B
-			// 如果把args的生成丢到协程里面做时
-			// 当一个落后&临时断线的Leader复活了，给其他peers发送appendRPC时
-			// 一个遍历的前方的rpc已经回包告诉这个落后Leader落后了，Leader会修改Term和状态
-			// 此时其他协程其实并不知道Leader已经变成follower了，而且还会读到这个节点获得的最新Term
-			// 此时发送的rpc会被检查并通过，因为term已经变成正常的了
-			go rf.SendAppendEntries(peer, targetLogIndex, &args)
-		}
+		rf.BroadCastAppendEntries()
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+func (rf *Raft) BroadCastAppendEntries() {
+	for peer, _ := range rf.peers {
+		if peer == rf.me {
+			continue
+		}
+		if rf.GetStateType() != Leader {
+			return
+		}
+		rf.mu.Lock()
+		offset := rf.getLogOffset()
+		nextIndex := rf.nextIndex[peer]
+		logEntries := make([]Log, 0)
+		//DPrintf("nextIndex: %d, lastLogIndex: %d, offset: %d\n", nextIndex, rf.getLastLogIndex(), offset)
+		if nextIndex <= offset {
+			// 这里如果nextIndex还很小，而lastIndex和offset已经拉高了，
+			// 说明nextIndex已经在快照中了，需要InstallSnapshotRPC来协助了
+			// DPrintf("%d GoSendInstallSnapshot: to %d\n", rf.me, peer)
+			go rf.GoSendInstallSnapshot(peer)
+			rf.mu.Unlock()
+			continue
+		}
+		for i := nextIndex; i <= rf.getLastLogIndex(); i++ {
+			logEntries = append(logEntries, rf.log[i-offset])
+		}
+		prevLogIndex, prevLogTerm := 0, 0
+		prevLog := rf.getLog(nextIndex - 1)
+		if prevLog.ApplyMsg.CommandValid {
+			prevLogIndex = rf.log[nextIndex-1-offset].ApplyMsg.CommandIndex
+			prevLogTerm = rf.log[nextIndex-1-offset].Term
+		} else if prevLog.ApplyMsg.SnapshotValid {
+			prevLogIndex = rf.log[nextIndex-1-offset].ApplyMsg.SnapshotIndex
+			prevLogTerm = rf.log[nextIndex-1-offset].ApplyMsg.SnapshotTerm
+		} else {
+			log2.Fatalf("%d Find Error\n", rf.me)
+		}
+		args := AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: prevLogIndex,
+			PrevLogTerm:  prevLogTerm,
+			Entries:      logEntries,
+			LeaderCommit: rf.commitIndex,
+		}
+		targetLogIndex := rf.getLastLogIndex() + 1
+		rf.mu.Unlock()
+		// 这里发现一种偶现情况，来自3b的TestBackup3B
+		// 如果把args的生成丢到协程里面做时
+		// 当一个落后&临时断线的Leader复活了，给其他peers发送appendRPC时
+		// 一个遍历的前方的rpc已经回包告诉这个落后Leader落后了，Leader会修改Term和状态
+		// 此时其他协程其实并不知道Leader已经变成follower了，而且还会读到这个节点获得的最新Term
+		// 此时发送的rpc会被检查并通过，因为term已经变成正常的了
+		go rf.SendAppendEntries(peer, targetLogIndex, &args)
 	}
 }
 
@@ -794,6 +797,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.log = append(rf.log, newLog)
 	rf.persist()
+	//rf.BroadCastAppendEntries()
 	return newLog.ApplyMsg.CommandIndex, term, true
 }
 

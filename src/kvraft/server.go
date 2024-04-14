@@ -7,9 +7,11 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const Debug = false
+const TimeOut = 1000
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -18,11 +20,23 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+type OpType int
+
+const (
+	GetOp OpType = iota
+	PutOp
+	AppendOp
+)
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Type    OpType
+	OpId    int
+	ClerkId int64
+	Key     string
+	Value   string
 }
 
 type KVServer struct {
@@ -33,21 +47,157 @@ type KVServer struct {
 	dead    int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
+	lastApplied  int // 防止有旧的提交又apply进状态机了
 
 	// Your definitions here.
+	hashTable map[string]string
+	Session   sync.Map
 }
 
+type CommandSession struct {
+	LastCommandId int
+	Value         string
+	Err           Err
+}
+
+func (kv *KVServer) getSessionResult(clerkId int64) (CommandSession, bool) {
+	if session, ok := kv.Session.Load(clerkId); ok {
+		return session.(CommandSession), true
+	}
+	return CommandSession{}, false
+}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	if res, ok := kv.getSessionResult(args.ClerkId); ok {
+		if res.LastCommandId == args.CommandId && res.Err == OK {
+			reply.Err = OK
+			reply.Value = res.Value
+			return
+		}
+	}
+
+	option := Op{
+		ClerkId: args.ClerkId,
+		OpId:    args.CommandId,
+		Type:    GetOp,
+		Key:     args.Key,
+	}
+	_, _, isLeader := kv.rf.Start(option)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	//todo 确认等待这个applyCh已经被提交
+	start := time.Now()
+	for {
+		if time.Since(start) >= TimeOut*time.Millisecond {
+			reply.Err = ErrTimeOut
+			return
+		}
+		if res, ok := kv.getSessionResult(args.ClerkId); ok {
+			if res.LastCommandId == args.CommandId && res.Err == OK {
+				reply.Err = OK
+				reply.Value = res.Value
+				return
+			}
+		}
+		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
+		time.Sleep(time.Millisecond * 10)
+	}
+	reply.Err = OK
 }
 
 func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	if res, ok := kv.getSessionResult(args.ClerkId); ok {
+		if res.LastCommandId == args.CommandId && res.Err == OK {
+			reply.Err = OK
+			return
+		}
+	}
+	option := Op{
+		ClerkId: args.ClerkId,
+		OpId:    args.CommandId,
+		Type:    PutOp,
+		Key:     args.Key,
+		Value:   args.Value,
+	}
+	_, _, isLeader := kv.rf.Start(option)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	start := time.Now()
+	for {
+		if time.Since(start) >= TimeOut*time.Millisecond {
+			reply.Err = ErrTimeOut
+			return
+		}
+		if res, ok := kv.getSessionResult(args.ClerkId); ok {
+			if res.LastCommandId == args.CommandId && res.Err == OK {
+				reply.Err = OK
+				return
+			}
+		}
+		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
+		time.Sleep(time.Millisecond * 10)
+	}
 }
 
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	if res, ok := kv.getSessionResult(args.ClerkId); ok {
+		if res.LastCommandId == args.CommandId && res.Err == OK {
+			reply.Err = OK
+			return
+		}
+	}
+	option := Op{
+		ClerkId: args.ClerkId,
+		OpId:    args.CommandId,
+		Type:    AppendOp,
+		Key:     args.Key,
+		Value:   args.Value,
+	}
+	_, _, isLeader := kv.rf.Start(option)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	start := time.Now()
+	for {
+		if time.Since(start) >= TimeOut*time.Millisecond {
+			reply.Err = ErrTimeOut
+			return
+		}
+		if res, ok := kv.getSessionResult(args.ClerkId); ok {
+			if res.LastCommandId == args.CommandId && res.Err == OK {
+				reply.Err = OK
+				DPrintf("timeDur: %v\n", time.Since(start))
+				return
+			}
+		}
+		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
+		time.Sleep(time.Millisecond * 10)
+	}
+
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -67,6 +217,67 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func (kv *KVServer) ListenApplyCh() {
+	for applyMsg := range kv.applyCh {
+		kv.DoApplyCh(&applyMsg)
+	}
+}
+func (kv *KVServer) DoApplyCh(applyMsg *raft.ApplyMsg) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	// 可能会有旧的applyMsg进来
+	if applyMsg.CommandIndex <= kv.lastApplied {
+		return
+	}
+	kv.lastApplied++
+	command, _ := applyMsg.Command.(Op)
+
+	// 重复的或是已有的，直接返回。
+	if res, ok := kv.getSessionResult(command.ClerkId); ok {
+		if res.LastCommandId >= command.OpId {
+			return
+		}
+	}
+
+	if applyMsg.CommandValid {
+		switch command.Type {
+		case GetOp:
+			// 处理 Get 操作
+			session := CommandSession{
+				Err:           OK,
+				Value:         kv.hashTable[command.Key],
+				LastCommandId: command.OpId,
+			}
+			kv.Session.Store(command.ClerkId, session)
+			break
+		case PutOp:
+			// 处理 Put 操作
+			kv.hashTable[command.Key] = command.Value
+			session := CommandSession{
+				Err:           OK,
+				Value:         command.Value,
+				LastCommandId: command.OpId,
+			}
+			kv.Session.Store(command.ClerkId, session)
+			break
+		case AppendOp:
+			kv.hashTable[command.Key] += command.Value
+			session := CommandSession{
+				Err:           OK,
+				Value:         kv.hashTable[command.Key],
+				LastCommandId: command.OpId,
+			}
+			kv.Session.Store(command.ClerkId, session)
+			break
+		default:
+			// 其他类型的处理
+		}
+
+	} else {
+		// 处理其他类型的 Raft 消息，比如快照等
+	}
 }
 
 // servers[] contains the ports of the set of
@@ -89,6 +300,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.hashTable = make(map[string]string)
 
 	// You may need initialization code here.
 
@@ -96,6 +308,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	go kv.ListenApplyCh()
 
 	return kv
 }
