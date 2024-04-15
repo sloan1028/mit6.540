@@ -92,6 +92,12 @@ type Raft struct {
 	delayTime   int64
 
 	applyCh chan ApplyMsg
+
+	heartTimer *time.Timer
+}
+
+func (rf *Raft) ResetHeartTimer(timeStamp int) {
+	rf.heartTimer.Reset(time.Duration(timeStamp) * time.Millisecond)
 }
 
 func (rf *Raft) GetStateType() (state StateType) {
@@ -168,6 +174,10 @@ func (rf *Raft) getLastLogTerm() int {
 
 func (rf *Raft) getLogTerm(logIndex int) int {
 	offset := rf.getLogOffset()
+	if logIndex-offset >= len(rf.log) {
+		//log2.Printf("----------%d getLogTerm Error!! logIndex: %d, offset: %d, logLen: %d\n", rf.me, logIndex, offset, len(rf.log))
+		return -1
+	}
 	if logIndex-offset > 0 {
 		return rf.log[logIndex-offset].Term
 	} else if logIndex-offset == 0 {
@@ -176,8 +186,8 @@ func (rf *Raft) getLogTerm(logIndex int) int {
 		}
 		return rf.log[0].Term
 	}
-	log2.Fatalf("getLogTerm Error\n")
-	return -10086
+	log2.Fatalf("----------%d getLogTerm Error!! logIndex: %d, offset: %d, logLen: %d\n", rf.me, logIndex, offset, len(rf.log))
+	return -1
 }
 
 func (rf *Raft) getLog(logIndex int) Log {
@@ -297,8 +307,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		stillNeedLogs := rf.log[idx:]
 		newLog = append(newLog, stillNeedLogs...)
 		rf.log = newLog
-		//DPrintf("----- %d Do SnapShot index: %d, LogLen to %d, lastIndex: %d, lastTerm: %d\n",
-		//rf.me, index, len(rf.log), index, term)
+		DPrintf("----- %d Do SnapShot index: %d, LogLen to %d, lastIndex: %d, lastTerm: %d\n",
+			rf.me, index, len(rf.log), index, term)
 		rf.persist()
 	}()
 }
@@ -546,8 +556,8 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	//DPrintf("%d Recevive AppendEntries From %d, "+
-	//"Term %d, lenLogs: %d\n", rf.me, args.LeaderId, args.Term, len(args.Entries))
+	DPrintf("%d Recevive AppendEntries From %d, "+
+		"Term %d, lenLogs: %d\n", rf.me, args.LeaderId, args.Term, len(args.Entries))
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//DPrintf("-------AppendEntries: %d term: %d from %v\n", rf.me, rf.currentTerm, args)
@@ -568,14 +578,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 因为下面第二步如果有很多日志不一致，会花很多时间来同步信息，会把领导选举卡到超时
 	offset := rf.getLogOffset()
 	// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
-	if args.PrevLogIndex > rf.getLastLogIndex() || rf.getLogTerm(args.PrevLogIndex) != args.PrevLogTerm {
+	logTerm := rf.getLogTerm(args.PrevLogIndex)
+	if args.PrevLogIndex > rf.getLastLogIndex() || logTerm != args.PrevLogTerm {
 		reply.Success = false
-		if args.PrevLogIndex > rf.getLastLogIndex() {
+		if args.PrevLogIndex > rf.getLastLogIndex() || logTerm == -1 {
 			//DPrintf("%d 太短了, back Term: -1, confictIndex: %d\n", rf.me, rf.getLastLogIndex())
 			reply.ConflictTerm = -1
 			reply.ConflictIndex = rf.getLastLogIndex()
 		} else {
-			reply.ConflictTerm = rf.getLogTerm(args.PrevLogIndex)
+			reply.ConflictTerm = logTerm
 			index := args.PrevLogIndex - 1
 			//DPrintf("args.PrevLogIndex %d \n", args.PrevLogIndex)
 			for index-offset >= 0 && rf.log[index-offset].Term == reply.ConflictTerm {
@@ -666,10 +677,12 @@ func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntrie
 }
 
 func (rf *Raft) GoSendAppendEntries() {
-	for rf.killed() == false && rf.GetStateType() == Leader {
+	for !rf.killed() && rf.GetStateType() == Leader {
 		// 如果服务器是leader，不停的发送包给所有的follower
+		<-rf.heartTimer.C
+		//log2.Printf("BroadCastAppendEntries")
 		rf.BroadCastAppendEntries()
-		time.Sleep(100 * time.Millisecond)
+		rf.ResetHeartTimer(100)
 	}
 }
 func (rf *Raft) BroadCastAppendEntries() {
@@ -684,7 +697,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		offset := rf.getLogOffset()
 		nextIndex := rf.nextIndex[peer]
 		logEntries := make([]Log, 0)
-		//DPrintf("nextIndex: %d, lastLogIndex: %d, offset: %d\n", nextIndex, rf.getLastLogIndex(), offset)
+		DPrintf("nextIndex: %d, lastLogIndex: %d, offset: %d\n", nextIndex, rf.getLastLogIndex(), offset)
 		if nextIndex <= offset {
 			// 这里如果nextIndex还很小，而lastIndex和offset已经拉高了，
 			// 说明nextIndex已经在快照中了，需要InstallSnapshotRPC来协助了
@@ -797,7 +810,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.log = append(rf.log, newLog)
 	rf.persist()
-	//rf.BroadCastAppendEntries()
+	DPrintf("Id: %d Do go rf.BroadCastAppendEntries()\n", rf.me)
+	defer func() {
+		//log2.Printf("ResetTick\n")
+		rf.ResetHeartTimer(0)
+	}()
 	return newLog.ApplyMsg.CommandIndex, term, true
 }
 
@@ -937,6 +954,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		nextIndex:   make([]int, len(peers)),
 		matchIndex:  make([]int, len(peers)),
 		applyCh:     applyCh,
+		heartTimer:  time.NewTimer(0),
 	}
 	rf.log[0].ApplyMsg.CommandValid = true
 	// Your initialization code here (3A, 3B, 3C).

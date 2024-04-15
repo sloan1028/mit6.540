@@ -151,7 +151,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 			}
 		}
 		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
-		time.Sleep(time.Millisecond * 10)
+		time.Sleep(time.Millisecond * 5)
 	}
 }
 
@@ -195,7 +195,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 			}
 		}
 		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
-		time.Sleep(time.Millisecond * 10)
+		time.Sleep(time.Millisecond * 5)
 	}
 
 }
