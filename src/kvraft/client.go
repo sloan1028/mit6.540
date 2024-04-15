@@ -41,23 +41,19 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-	DPrintf("%d Call Get Key: %v\n", ck.clerkId, key)
 	// You will have to modify this function.
 	args := GetArgs{key, ck.commandId, ck.clerkId}
 	for {
 		reply := GetReply{}
-		DPrintf("%d Call Get Key: %v\n", ck.clerkId, key)
 		ok := ck.servers[ck.leaderId].Call("KVServer.Get", &args, &reply)
-		//DPrintf("%d Receive value: %v\n", ck.clerkId, reply.Value)
 		if !ok || reply.Err != OK {
 			if reply.Err == ErrWrongLeader {
-				DPrintf("Get ErrWrongLeader\n")
+
 			} else if reply.Err == ErrTimeOut {
-				DPrintf("Get ErrTimeOut\n")
+
 			}
 			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
 		} else {
-			DPrintf("Get success, commandId: %v\n", ck.commandId)
 			ck.commandId++
 			return reply.Value
 		}
@@ -80,17 +76,15 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args := PutAppendArgs{key, value, ck.commandId, ck.clerkId}
 	for {
 		reply := PutAppendReply{}
-		DPrintf("%d Call %v Key: %v Value: %v, to Leader: %d\n", ck.clerkId, op, key, value, ck.leaderId)
 		ok := ck.servers[ck.leaderId].Call("KVServer."+op, &args, &reply)
 		if !ok || reply.Err != OK {
 			if reply.Err == ErrWrongLeader {
-				DPrintf("Get ErrWrongLeader\n")
+
 			} else if reply.Err == ErrTimeOut {
-				DPrintf("Get ErrTimeOut\n")
+
 			}
 			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
 		} else {
-			DPrintf("putappend success, commandId: %v\n", ck.commandId)
 			ck.commandId++
 			return
 		}

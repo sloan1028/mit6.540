@@ -4,13 +4,14 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const Debug = false
+const Debug = true
 const TimeOut = 1000
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
@@ -92,7 +93,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	//todo 确认等待这个applyCh已经被提交
+	//确认等待这个applyCh已经被提交
 	start := time.Now()
 	for {
 		if time.Since(start) >= TimeOut*time.Millisecond {
@@ -151,7 +152,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 			}
 		}
 		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
-		time.Sleep(time.Millisecond * 5)
+		time.Sleep(time.Millisecond * 10)
 	}
 }
 
@@ -190,7 +191,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 		if res, ok := kv.getSessionResult(args.ClerkId); ok {
 			if res.LastCommandId == args.CommandId && res.Err == OK {
 				reply.Err = OK
-				DPrintf("timeDur: %v\n", time.Since(start))
+				//DPrintf("timeDur: %v\n", time.Since(start))
 				return
 			}
 		}
@@ -227,21 +228,21 @@ func (kv *KVServer) ListenApplyCh() {
 func (kv *KVServer) DoApplyCh(applyMsg *raft.ApplyMsg) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	// 可能会有旧的applyMsg进来
-	if applyMsg.CommandIndex <= kv.lastApplied {
-		return
-	}
-	kv.lastApplied++
-	command, _ := applyMsg.Command.(Op)
-
-	// 重复的或是已有的，直接返回。
-	if res, ok := kv.getSessionResult(command.ClerkId); ok {
-		if res.LastCommandId >= command.OpId {
-			return
-		}
-	}
+	//DPrintf("Receive ApplyMsg: commandValid: %v SnapValid: %v\n", applyMsg.CommandValid, applyMsg.SnapshotValid)
 
 	if applyMsg.CommandValid {
+		// 可能会有旧的applyMsg进来
+		if applyMsg.CommandIndex <= kv.lastApplied {
+			return
+		}
+		kv.lastApplied++
+		command, _ := applyMsg.Command.(Op)
+		// 重复的或是已有的，直接返回。
+		if res, ok := kv.getSessionResult(command.ClerkId); ok {
+			if res.LastCommandId >= command.OpId {
+				return
+			}
+		}
 		switch command.Type {
 		case GetOp:
 			// 处理 Get 操作
@@ -271,12 +272,64 @@ func (kv *KVServer) DoApplyCh(applyMsg *raft.ApplyMsg) {
 			}
 			kv.Session.Store(command.ClerkId, session)
 			break
-		default:
-			// 其他类型的处理
 		}
 
+		if kv.maxraftstate > 0 && kv.rf.Persister.RaftStateSize() >= kv.maxraftstate {
+			w := new(bytes.Buffer)
+			e := labgob.NewEncoder(w)
+			e.Encode(kv.lastApplied)
+			e.Encode(kv.hashTable)
+			// Encode kv.Session
+			sessionData, err := encodeSyncMap(&kv.Session)
+			if err != nil {
+				log.Fatalf("Encode kv.Session Error: %v\n", err)
+				// 处理错误
+			}
+			w.Write(sessionData) // 将序列化的 session 数据写入 buffer
+			kv.rf.Snapshot(kv.lastApplied, w.Bytes())
+		}
+	} else if applyMsg.SnapshotValid {
+		// 处理快照
+		kv.DoSnapshot(applyMsg.Snapshot)
 	} else {
-		// 处理其他类型的 Raft 消息，比如快照等
+		log.Fatalf("ApplyMsg Type Fault!!!\n")
+	}
+}
+
+func encodeSyncMap(sm *sync.Map) ([]byte, error) {
+	// 创建一个普通的 map 以存储 sync.Map 的数据
+	m := make(map[interface{}]interface{})
+	sm.Range(func(k, v interface{}) bool {
+		m[k] = v
+		return true
+	})
+
+	// 编码普通的 map
+	w := new(bytes.Buffer)
+	enc := labgob.NewEncoder(w)
+	if err := enc.Encode(m); err != nil {
+		return nil, err
+	}
+	return w.Bytes(), nil
+}
+
+func (kv *KVServer) DoSnapshot(snapshot []byte) {
+	if snapshot == nil || len(snapshot) < 1 { // bootstrap without any state?
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	var lastApplied int
+	var hashTable map[string]string
+	var m map[interface{}]interface{}
+	if d.Decode(&lastApplied) != nil || d.Decode(&hashTable) != nil || d.Decode(&m) != nil {
+		log.Fatalf("%v Decode error %v\n", d, snapshot)
+	} else {
+		kv.hashTable = hashTable
+		kv.lastApplied = lastApplied
+		for k, v := range m {
+			kv.Session.Store(k, v)
+		}
 	}
 }
 
@@ -296,6 +349,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(CommandSession{})
 
 	kv := new(KVServer)
 	kv.me = me
@@ -306,7 +360,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
+	kv.DoSnapshot(persister.ReadSnapshot())
 	// You may need initialization code here.
 	go kv.ListenApplyCh()
 

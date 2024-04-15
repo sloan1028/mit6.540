@@ -68,7 +68,7 @@ type Log struct {
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
+	Persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
@@ -186,7 +186,7 @@ func (rf *Raft) getLogTerm(logIndex int) int {
 		}
 		return rf.log[0].Term
 	}
-	log2.Fatalf("----------%d getLogTerm Error!! logIndex: %d, offset: %d, logLen: %d\n", rf.me, logIndex, offset, len(rf.log))
+	//log2.Fatalf("----------%d getLogTerm Error!! logIndex: %d, offset: %d, logLen: %d\n", rf.me, logIndex, offset, len(rf.log))
 	return -1
 }
 
@@ -230,7 +230,7 @@ func (rf *Raft) persist() {
 
 	//DPrintf("rf: %d, Save State: SnapshotTerm %d, SnapshotIndex %d snapshotSize %d",
 	//rf.me, rf.log[0].ApplyMsg.SnapshotTerm, rf.log[0].ApplyMsg.SnapshotIndex, len(rf.log[0].ApplyMsg.Snapshot))
-	rf.persister.Save(raftState, rf.log[0].ApplyMsg.Snapshot)
+	rf.Persister.Save(raftState, rf.log[0].ApplyMsg.Snapshot)
 }
 
 // restore previously persisted state.
@@ -250,7 +250,6 @@ func (rf *Raft) readPersist(data []byte) {
 		d.Decode(&SnapshotTerm) != nil || d.Decode(&SnapshotIndex) != nil {
 		//DPrintf("%v Decode error %v\n", d, data)
 	} else {
-		rf.mu.Lock()
 		rf.currentTerm = curTerm
 		rf.votedFor = voteFor
 		rf.log = append(rf.log, log...)
@@ -260,13 +259,20 @@ func (rf *Raft) readPersist(data []byte) {
 			rf.log[0].ApplyMsg.SnapshotIndex = SnapshotIndex
 			rf.log[0].ApplyMsg.SnapshotTerm = SnapshotTerm
 			// 这里重开时要把快照拉回来，否则下次再存的时候，这里是空的直接把快照弄没了。Bug From 3D最后一个TestSnapshotInit3D
-			rf.log[0].ApplyMsg.Snapshot = rf.persister.ReadSnapshot()
+			rf.log[0].ApplyMsg.Snapshot = rf.Persister.ReadSnapshot()
 			rf.lastApplied = SnapshotIndex
+			//DPrintf("id: %d ReadPersist, ApplyMsg LastIndex: %d\n", rf.me, rf.log[0].ApplyMsg.SnapshotIndex)
 			rf.commitIndex = SnapshotIndex
+
+			// 不要瞎并发，会产生乱序的问题，自己给自己挖坑跳
+			// 比如这里发snapshot进去后会重置lastApplied, 如果这之前发生提交会被重置掉，而另一个协程不知情的情况下继续发送就会跳过中间的提交
+			// but 不并发会产生阻塞，其实这里可以直接交给服务器自己初始化的时候做读取而不用管道
+			//go func() {
+			//rf.applyCh <- rf.log[0].ApplyMsg
+			//}()
 		}
 		//DPrintf("%v Decode success snapshotTerm: %d snapshotIndex: %d"+
 		//"LastApplied: %d\n", rf.me, SnapshotTerm, SnapshotIndex, rf.lastApplied)
-		rf.mu.Unlock()
 	}
 }
 
@@ -280,7 +286,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		rf.mu.Lock() //为什么我在这里加一个锁，就会导致程序阻塞呢
 		defer rf.mu.Unlock()
 		offset := rf.getLogOffset()
-		if index-offset <= 0 {
+		if index-offset <= 0 || index-offset >= len(rf.log) {
 			return
 		}
 		term := rf.log[index-offset].Term
@@ -307,8 +313,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		stillNeedLogs := rf.log[idx:]
 		newLog = append(newLog, stillNeedLogs...)
 		rf.log = newLog
-		DPrintf("----- %d Do SnapShot index: %d, LogLen to %d, lastIndex: %d, lastTerm: %d\n",
-			rf.me, index, len(rf.log), index, term)
+		//log2.Printf("----- %d Do SnapShot index: %d, LogLen to %d, lastIndex: %d, lastTerm: %d\n",
+		//rf.me, index, len(rf.log), index, term)
 		rf.persist()
 	}()
 }
@@ -372,10 +378,12 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 			// 发现保留的log带有未提交的日志的话，也要把这些日志提交完整，否则后面的提交顺序会乱掉
 			for j := rf.lastApplied + 1; j <= args.LastIncludedIndex; j++ {
-				//DPrintf("---Install Snapshot"+
-				//"%d apply index %d command %v to state machine, offset: %d\n",
-				//rf.me, j, rf.log[j-oldOffset].ApplyMsg.Command, oldOffset)
-				rf.applyCh <- rf.log[j-oldOffset].ApplyMsg
+				if j-oldOffset > 0 && j-oldOffset < len(rf.log) {
+					//DPrintf("---Install Snapshot"+
+					//"%d apply index %d command %v to state machine, offset: %d\n",
+					//rf.me, j, rf.log[j-oldOffset].ApplyMsg.Command, oldOffset)
+					rf.applyCh <- rf.log[j-oldOffset].ApplyMsg
+				}
 			}
 			rf.lastApplied = args.LastIncludedIndex
 			rf.commitIndex = args.LastIncludedIndex
@@ -401,13 +409,15 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	//len(rf.log), rf.getLastLogIndex(), rf.getLastLogTerm())
 	rf.commitIndex = args.LastIncludedIndex
 	rf.lastApplied = args.LastIncludedIndex
+	//DPrintf("%d 5.Install Snapshot, Get LastApplied: %d\n", rf.me, args.LastIncludedIndex)
 	apm := ApplyMsg{
 		SnapshotValid: true,
 		SnapshotIndex: args.LastIncludedIndex,
 		SnapshotTerm:  args.LastIncludedTerm,
 		Snapshot:      args.Data,
 	}
-	//DPrintf("rf %d Apply snapshot size: %d\n", rf.me, len(args.Data))
+	//log2.Printf("rf %d Apply snapshot size: %d\n", rf.me, len(args.Data))
+	//DPrintf("id: %d InstallSnapshot, ApplyMsg LastIndex: %d\n", rf.me, rf.log[0].ApplyMsg.SnapshotIndex)
 	rf.applyCh <- apm
 	rf.persist()
 }
@@ -422,7 +432,7 @@ func (rf *Raft) GoSendInstallSnapshot(peer int) {
 		LeaderId:          rf.me,
 		LastIncludedIndex: rf.log[0].ApplyMsg.SnapshotIndex,
 		LastIncludedTerm:  rf.log[0].ApplyMsg.SnapshotTerm,
-		Data:              rf.persister.ReadSnapshot(),
+		Data:              rf.Persister.ReadSnapshot(),
 	}
 	applySnapshotIndex := rf.log[0].ApplyMsg.SnapshotIndex
 	//DPrintf("%d GoSendInstallSnapshot: to %d\n", rf.me, peer)
@@ -556,8 +566,8 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	DPrintf("%d Recevive AppendEntries From %d, "+
-		"Term %d, lenLogs: %d\n", rf.me, args.LeaderId, args.Term, len(args.Entries))
+	//DPrintf("%d Recevive AppendEntries From %d, "+
+	//"Term %d, lenLogs: %d\n", rf.me, args.LeaderId, args.Term, len(args.Entries))
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	//DPrintf("-------AppendEntries: %d term: %d from %v\n", rf.me, rf.currentTerm, args)
@@ -579,6 +589,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	offset := rf.getLogOffset()
 	// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	logTerm := rf.getLogTerm(args.PrevLogIndex)
+	//DPrintf("%d AppendEntries, args.PrevIndex: %d, offset: %d, lenLog: %d, lastLogIndex: %d\n",
+	//rf.me, args.PrevLogIndex, offset, len(rf.log), rf.getLastLogIndex())
 	if args.PrevLogIndex > rf.getLastLogIndex() || logTerm != args.PrevLogTerm {
 		reply.Success = false
 		if args.PrevLogIndex > rf.getLastLogIndex() || logTerm == -1 {
@@ -697,7 +709,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		offset := rf.getLogOffset()
 		nextIndex := rf.nextIndex[peer]
 		logEntries := make([]Log, 0)
-		DPrintf("nextIndex: %d, lastLogIndex: %d, offset: %d\n", nextIndex, rf.getLastLogIndex(), offset)
+		//DPrintf("nextIndex: %d, lastLogIndex: %d, offset: %d\n", nextIndex, rf.getLastLogIndex(), offset)
 		if nextIndex <= offset {
 			// 这里如果nextIndex还很小，而lastIndex和offset已经拉高了，
 			// 说明nextIndex已经在快照中了，需要InstallSnapshotRPC来协助了
@@ -756,7 +768,8 @@ func (rf *Raft) LeaderRefreshCommitIndex() {
 		newCommitIndex++
 	}
 	newCommitIndex--
-	if rf.log[newCommitIndex-offset].Term != rf.currentTerm {
+	if newCommitIndex-offset <= 0 || newCommitIndex-offset >= len(rf.log) ||
+		rf.log[newCommitIndex-offset].Term != rf.currentTerm {
 		// 如果要提交的log还是在老任期的，是不予提交的
 		// 只有节点在当前任期内，才予以提交（并会把老节点一起提交），详情5.4.2
 		return
@@ -766,16 +779,13 @@ func (rf *Raft) LeaderRefreshCommitIndex() {
 
 func (rf *Raft) CheckApplyToStateMachine() {
 	offset := rf.getLogOffset()
-	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-		if i-offset <= 0 {
-			//DPrintf("%d 发现一个i-offset<=0, i: %d, offset: %d, "+
-			//"commitIndex: %d, lenLog: %d\n", rf.me, i, offset, rf.commitIndex, len(rf.log))
-			continue
+	for applyIndex := rf.lastApplied + 1; applyIndex <= rf.commitIndex; applyIndex++ {
+		if applyIndex-offset > 0 && applyIndex-offset < len(rf.log) {
+			//DPrintf("%d do apply index %d command %v to state machine\n",
+			//rf.me, applyIndex, rf.log[applyIndex-offset].ApplyMsg.Command)
+			rf.applyCh <- rf.log[applyIndex-offset].ApplyMsg
+			rf.lastApplied = applyIndex
 		}
-		//rf.log[i-offset].ApplyMsg.CommandValid = true
-		//DPrintf("%d apply index %d command %v to state machine\n", rf.me, i, rf.log[i-offset].ApplyMsg.Command)
-		rf.applyCh <- rf.log[i-offset].ApplyMsg
-		rf.lastApplied = i
 	}
 }
 
@@ -810,9 +820,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.log = append(rf.log, newLog)
 	rf.persist()
-	DPrintf("Id: %d Do go rf.BroadCastAppendEntries()\n", rf.me)
 	defer func() {
-		//log2.Printf("ResetTick\n")
 		rf.ResetHeartTimer(0)
 	}()
 	return newLog.ApplyMsg.CommandIndex, term, true
@@ -945,7 +953,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
 		peers:       peers,
-		persister:   persister,
+		Persister:   persister,
 		me:          me,
 		votedFor:    -1,
 		lastApplied: 0,
