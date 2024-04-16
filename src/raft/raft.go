@@ -51,6 +51,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	Term         int
 
 	// For 3D:
 	SnapshotValid bool
@@ -61,7 +62,6 @@ type ApplyMsg struct {
 
 type Log struct {
 	ApplyMsg ApplyMsg
-	Term     int
 }
 
 // A Go object implementing a single Raft peer.
@@ -163,7 +163,7 @@ func (rf *Raft) getLastLogIndex() int {
 func (rf *Raft) getLastLogTerm() int {
 	log := rf.log[len(rf.log)-1]
 	if log.ApplyMsg.CommandValid {
-		return log.Term
+		return log.ApplyMsg.Term
 	}
 	if log.ApplyMsg.SnapshotValid {
 		return log.ApplyMsg.SnapshotTerm
@@ -179,12 +179,12 @@ func (rf *Raft) getLogTerm(logIndex int) int {
 		return -1
 	}
 	if logIndex-offset > 0 {
-		return rf.log[logIndex-offset].Term
+		return rf.log[logIndex-offset].ApplyMsg.Term
 	} else if logIndex-offset == 0 {
 		if rf.log[0].ApplyMsg.SnapshotValid {
 			return rf.log[0].ApplyMsg.SnapshotTerm
 		}
-		return rf.log[0].Term
+		return rf.log[0].ApplyMsg.Term
 	}
 	//log2.Fatalf("----------%d getLogTerm Error!! logIndex: %d, offset: %d, logLen: %d\n", rf.me, logIndex, offset, len(rf.log))
 	return -1
@@ -289,10 +289,9 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		if index-offset <= 0 || index-offset >= len(rf.log) {
 			return
 		}
-		term := rf.log[index-offset].Term
+		term := rf.log[index-offset].ApplyMsg.Term
 		newLog := make([]Log, 1)
 		newLog[0] = Log{
-			Term: term,
 			ApplyMsg: ApplyMsg{
 				SnapshotValid: true,
 				SnapshotIndex: index,
@@ -365,7 +364,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		}
 		newApplyMsg := Log{
 			ApplyMsg: newSnapshot,
-			Term:     args.LastIncludedTerm,
 		}
 		rf.log[0] = newApplyMsg
 		rf.persist()
@@ -374,7 +372,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	// retain log entries following it and reply
 	for i := 1; i < len(rf.log); i++ {
 		log := rf.log[i]
-		if log.ApplyMsg.CommandIndex == args.LastIncludedIndex && log.Term == args.LastIncludedTerm {
+		if log.ApplyMsg.CommandIndex == args.LastIncludedIndex && log.ApplyMsg.Term == args.LastIncludedTerm {
 
 			// 发现保留的log带有未提交的日志的话，也要把这些日志提交完整，否则后面的提交顺序会乱掉
 			for j := rf.lastApplied + 1; j <= args.LastIncludedIndex; j++ {
@@ -601,7 +599,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			reply.ConflictTerm = logTerm
 			index := args.PrevLogIndex - 1
 			//DPrintf("args.PrevLogIndex %d \n", args.PrevLogIndex)
-			for index-offset >= 0 && rf.log[index-offset].Term == reply.ConflictTerm {
+			for index-offset >= 0 && rf.log[index-offset].ApplyMsg.Term == reply.ConflictTerm {
 				index--
 			}
 			reply.ConflictIndex = index
@@ -617,7 +615,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// delete the existing entry and all that follow it
 	newEntriesPos := 0
 	for i := args.PrevLogIndex + 1; i <= rf.getLastLogIndex() && newEntriesPos < len(args.Entries); i, newEntriesPos = i+1, newEntriesPos+1 {
-		if rf.log[i-offset].Term != args.Entries[newEntriesPos].Term {
+		if rf.log[i-offset].ApplyMsg.Term != args.Entries[newEntriesPos].ApplyMsg.Term {
 			rf.log = rf.log[:i-offset]
 			rf.persist()
 			break
@@ -667,7 +665,7 @@ func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntrie
 					//len(rf.log), rf.log[0].ApplyMsg.SnapshotTerm, rf.log[0].ApplyMsg.SnapshotIndex)
 					for i := len(rf.log) - 1; i >= 1; i-- {
 						//DPrintf("log[%d].Term == %d\n", i, rf.log[i].Term)
-						if rf.log[i].Term == conflictTerm {
+						if rf.log[i].ApplyMsg.Term == conflictTerm {
 							rf.nextIndex[server] = rf.log[i].ApplyMsg.CommandIndex
 							break
 						}
@@ -725,7 +723,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		prevLog := rf.getLog(nextIndex - 1)
 		if prevLog.ApplyMsg.CommandValid {
 			prevLogIndex = rf.log[nextIndex-1-offset].ApplyMsg.CommandIndex
-			prevLogTerm = rf.log[nextIndex-1-offset].Term
+			prevLogTerm = rf.log[nextIndex-1-offset].ApplyMsg.Term
 		} else if prevLog.ApplyMsg.SnapshotValid {
 			prevLogIndex = rf.log[nextIndex-1-offset].ApplyMsg.SnapshotIndex
 			prevLogTerm = rf.log[nextIndex-1-offset].ApplyMsg.SnapshotTerm
@@ -769,7 +767,7 @@ func (rf *Raft) LeaderRefreshCommitIndex() {
 	}
 	newCommitIndex--
 	if newCommitIndex-offset <= 0 || newCommitIndex-offset >= len(rf.log) ||
-		rf.log[newCommitIndex-offset].Term != rf.currentTerm {
+		rf.log[newCommitIndex-offset].ApplyMsg.Term != rf.currentTerm {
 		// 如果要提交的log还是在老任期的，是不予提交的
 		// 只有节点在当前任期内，才予以提交（并会把老节点一起提交），详情5.4.2
 		return
@@ -811,11 +809,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//DPrintf("command %v to %d Term: %v\n", command, rf.me, rf.currentTerm)
 	// Your code here (3B).
 	newLog := Log{
-		Term: term,
 		ApplyMsg: ApplyMsg{
 			CommandValid: true,
 			Command:      command,
 			CommandIndex: rf.getLastLogIndex() + 1,
+			Term:         term,
 		},
 	}
 	rf.log = append(rf.log, newLog)
