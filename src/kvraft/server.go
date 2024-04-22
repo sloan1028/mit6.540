@@ -11,8 +11,10 @@ import (
 	"time"
 )
 
-const Debug = true
-const TimeOut = 1000
+const Debug = false
+const (
+	HandleOpTimeOut = time.Millisecond * 500
+)
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -51,21 +53,16 @@ type KVServer struct {
 	lastApplied  int // 防止有旧的提交又apply进状态机了
 
 	// Your definitions here.
-	hashTable map[string]string
-	Session   sync.Map
+	stateMachine map[string]string
+	Session      map[int64]CommandSession
+	notifyChans  map[int]*chan CommandSession
 }
 
 type CommandSession struct {
 	LastCommandId int
 	Value         string
 	Err           Err
-}
-
-func (kv *KVServer) getSessionResult(clerkId int64) (CommandSession, bool) {
-	if session, ok := kv.Session.Load(clerkId); ok {
-		return session.(CommandSession), true
-	}
-	return CommandSession{}, false
+	CommandTerm   int
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -74,13 +71,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	if res, ok := kv.getSessionResult(args.ClerkId); ok {
-		if res.LastCommandId == args.CommandId && res.Err == OK {
-			reply.Err = OK
-			reply.Value = res.Value
-			return
-		}
-	}
 
 	option := Op{
 		ClerkId: args.ClerkId,
@@ -88,29 +78,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		Type:    GetOp,
 		Key:     args.Key,
 	}
-	_, _, isLeader := kv.rf.Start(option)
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-	//确认等待这个applyCh已经被提交
-	start := time.Now()
-	for {
-		if time.Since(start) >= TimeOut*time.Millisecond {
-			reply.Err = ErrTimeOut
-			return
-		}
-		if res, ok := kv.getSessionResult(args.ClerkId); ok {
-			if res.LastCommandId == args.CommandId && res.Err == OK {
-				reply.Err = OK
-				reply.Value = res.Value
-				return
-			}
-		}
-		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
-		time.Sleep(time.Millisecond * 10)
-	}
-	reply.Err = OK
+	res := kv.handleOp(option)
+	reply.Err = res.Err
+	reply.Value = res.Value
 }
 
 func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
@@ -120,12 +90,16 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	if res, ok := kv.getSessionResult(args.ClerkId); ok {
+	kv.mu.Lock()
+	if res, ok := kv.Session[args.ClerkId]; ok {
 		if res.LastCommandId == args.CommandId && res.Err == OK {
 			reply.Err = OK
+			kv.mu.Unlock()
 			return
 		}
 	}
+	kv.mu.Unlock()
+
 	option := Op{
 		ClerkId: args.ClerkId,
 		OpId:    args.CommandId,
@@ -133,27 +107,8 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 		Key:     args.Key,
 		Value:   args.Value,
 	}
-	_, _, isLeader := kv.rf.Start(option)
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	start := time.Now()
-	for {
-		if time.Since(start) >= TimeOut*time.Millisecond {
-			reply.Err = ErrTimeOut
-			return
-		}
-		if res, ok := kv.getSessionResult(args.ClerkId); ok {
-			if res.LastCommandId == args.CommandId && res.Err == OK {
-				reply.Err = OK
-				return
-			}
-		}
-		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
-		time.Sleep(time.Millisecond * 10)
-	}
+	res := kv.handleOp(option)
+	reply.Err = res.Err
 }
 
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
@@ -163,12 +118,16 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	if res, ok := kv.getSessionResult(args.ClerkId); ok {
+	kv.mu.Lock()
+	if res, ok := kv.Session[args.ClerkId]; ok {
 		if res.LastCommandId == args.CommandId && res.Err == OK {
 			reply.Err = OK
+			kv.mu.Unlock()
 			return
 		}
 	}
+	kv.mu.Unlock()
+
 	option := Op{
 		ClerkId: args.ClerkId,
 		OpId:    args.CommandId,
@@ -176,29 +135,46 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 		Key:     args.Key,
 		Value:   args.Value,
 	}
-	_, _, isLeader := kv.rf.Start(option)
+	res := kv.handleOp(option)
+	reply.Err = res.Err
+}
+
+func (kv *KVServer) handleOp(operation Op) (result CommandSession) {
+	//DPrintf("%d 准备添加ClerckId: %v, OpId: %v 到raft里\n", kv.me, operation.ClerkId, operation.OpId)
+	index, term, isLeader := kv.rf.Start(operation)
 	if !isLeader {
-		reply.Err = ErrWrongLeader
+		result.Err = ErrWrongLeader
 		return
 	}
+	//tt := time.Now()
+	kv.mu.Lock()
+	newCh := make(chan CommandSession)
+	kv.notifyChans[index] = &newCh
+	kv.mu.Unlock()
 
-	start := time.Now()
-	for {
-		if time.Since(start) >= TimeOut*time.Millisecond {
-			reply.Err = ErrTimeOut
+	defer func() {
+		kv.mu.Lock()
+		delete(kv.notifyChans, index)
+		close(newCh)
+		kv.mu.Unlock()
+		//log.Printf("time: %v", time.Since(tt))
+	}()
+
+	select {
+	case <-time.After(HandleOpTimeOut):
+		result.Err = ErrTimeOut
+		return
+	case msg, success := <-newCh:
+		//DPrintf("%d 接收到ClerckId: %v, OpId: %v, Index: %v,"+
+		//"result: %v, commandTerm: %d, term: %d\n", kv.me, operation.ClerkId, operation.OpId, index, msg.Err, msg.CommandTerm, term)
+		if success && msg.CommandTerm == term {
+			result = msg
+			return
+		} else {
+			result.Err = ErrTimeOut
 			return
 		}
-		if res, ok := kv.getSessionResult(args.ClerkId); ok {
-			if res.LastCommandId == args.CommandId && res.Err == OK {
-				reply.Err = OK
-				//DPrintf("timeDur: %v\n", time.Since(start))
-				return
-			}
-		}
-		// 这里不要Sleep太久,否则过不了速度测试,取10ms间隔即可。
-		time.Sleep(time.Millisecond * 5)
 	}
-
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -221,99 +197,112 @@ func (kv *KVServer) killed() bool {
 }
 
 func (kv *KVServer) ListenApplyCh() {
-	for applyMsg := range kv.applyCh {
-		kv.DoApplyCh(&applyMsg)
+	for !kv.killed() {
+		select {
+		case applyMsg := <-kv.applyCh:
+			if applyMsg.CommandValid {
+				DPrintf("Kvraft: ID: %d, GetCommandApplyMsg, Index: %d\n", kv.me, applyMsg.CommandIndex)
+				kv.parseApplyMsgToCommand(&applyMsg)
+				kv.checkDoSnapshot() // 检查是否需要执行快照
+			} else if applyMsg.SnapshotValid {
+				DPrintf("Kvraft: ID: %d, GetSnapshotApplyMsg, Index: %d\n", kv.me, applyMsg.SnapshotIndex)
+				// 处理快照
+				kv.ReadSnapshot(applyMsg.Snapshot)
+			} else {
+				DPrintf("ApplyMsg Type Fault!!!\n")
+			}
+		}
 	}
 }
-func (kv *KVServer) DoApplyCh(applyMsg *raft.ApplyMsg) {
+
+func (kv *KVServer) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	//DPrintf("Receive ApplyMsg: commandValid: %v SnapValid: %v\n", applyMsg.CommandValid, applyMsg.SnapshotValid)
-
-	if applyMsg.CommandValid {
-		// 可能会有旧的applyMsg进来
-		if applyMsg.CommandIndex <= kv.lastApplied {
-			return
-		}
-		kv.lastApplied++
-		command, _ := applyMsg.Command.(Op)
-		// 重复的或是已有的，直接返回。
-		if res, ok := kv.getSessionResult(command.ClerkId); ok {
-			if res.LastCommandId >= command.OpId {
-				return
-			}
-		}
-		switch command.Type {
-		case GetOp:
-			// 处理 Get 操作
-			session := CommandSession{
-				Err:           OK,
-				Value:         kv.hashTable[command.Key],
-				LastCommandId: command.OpId,
-			}
-			kv.Session.Store(command.ClerkId, session)
-			break
-		case PutOp:
-			// 处理 Put 操作
-			kv.hashTable[command.Key] = command.Value
-			session := CommandSession{
-				Err:           OK,
-				Value:         command.Value,
-				LastCommandId: command.OpId,
-			}
-			kv.Session.Store(command.ClerkId, session)
-			break
-		case AppendOp:
-			kv.hashTable[command.Key] += command.Value
-			session := CommandSession{
-				Err:           OK,
-				Value:         kv.hashTable[command.Key],
-				LastCommandId: command.OpId,
-			}
-			kv.Session.Store(command.ClerkId, session)
-			break
-		}
-
-		if kv.maxraftstate > 0 && kv.rf.Persister.RaftStateSize() >= kv.maxraftstate {
-			w := new(bytes.Buffer)
-			e := labgob.NewEncoder(w)
-			e.Encode(kv.lastApplied)
-			e.Encode(kv.hashTable)
-			// Encode kv.Session
-			sessionData, err := encodeSyncMap(&kv.Session)
-			if err != nil {
-				log.Fatalf("Encode kv.Session Error: %v\n", err)
-				// 处理错误
-			}
-			w.Write(sessionData) // 将序列化的 session 数据写入 buffer
-			kv.rf.Snapshot(kv.lastApplied, w.Bytes())
-		}
-	} else if applyMsg.SnapshotValid {
-		// 处理快照
-		kv.DoSnapshot(applyMsg.Snapshot)
+	// 可能会有旧的applyMsg进来
+	if applyMsg.CommandIndex <= kv.lastApplied {
+		return
+	}
+	kv.lastApplied = applyMsg.CommandIndex
+	var response CommandSession
+	command, _ := applyMsg.Command.(Op)
+	if command.Type == AppendOp {
+		DPrintf("Id: %d ParseApplyMsgToCommandIndex: %d clerkId: %v, opId: %v, key: %v, value: %v\n",
+			kv.me, applyMsg.CommandIndex, command.ClerkId, command.OpId, command.Key, command.Value)
+	}
+	if command.Type != GetOp && kv.isDuplicateRequest(command.ClerkId, command.OpId) {
+		command, _ := kv.Session[command.ClerkId]
+		response = command
+		DPrintf("isDuplicateRequest")
 	} else {
-		log.Fatalf("ApplyMsg Type Fault!!!\n")
+		response = kv.executeStateMachine(&command, applyMsg.Term)
+	}
+
+	// only notify related channel for currentTerm's log when node is leader
+	if currentTerm, isLeader := kv.rf.GetState(); isLeader && applyMsg.Term == currentTerm {
+		response.CommandTerm = applyMsg.Term
+		//DPrintf("%d 准备返回一条response给commandIndex: %d\n", kv.me, applyMsg.CommandIndex)
+		if ch := kv.notifyChans[applyMsg.CommandIndex]; ch != nil {
+			//DPrintf("%d Apply response:Term: %v commandId: %v err: %v to ch\n",
+			//kv.me, response.CommandTerm, response.LastCommandId, response.Err)
+			*ch <- response // 注意这里使用 *ch 来解引用指针
+		} else {
+			// 可能需要处理 nil 指针的情况
+			DPrintf("-----Channel is nil at index: %d\n", applyMsg.CommandIndex)
+		}
 	}
 }
 
-func encodeSyncMap(sm *sync.Map) ([]byte, error) {
-	// 创建一个普通的 map 以存储 sync.Map 的数据
-	m := make(map[interface{}]interface{})
-	sm.Range(func(k, v interface{}) bool {
-		m[k] = v
-		return true
-	})
-
-	// 编码普通的 map
-	w := new(bytes.Buffer)
-	enc := labgob.NewEncoder(w)
-	if err := enc.Encode(m); err != nil {
-		return nil, err
+func (kv *KVServer) isDuplicateRequest(clerkId int64, opId int) bool {
+	if res, ok := kv.Session[clerkId]; ok {
+		if res.LastCommandId == opId {
+			return true
+		}
 	}
-	return w.Bytes(), nil
+	return false
 }
 
-func (kv *KVServer) DoSnapshot(snapshot []byte) {
+func (kv *KVServer) executeStateMachine(operation *Op, term int) (session CommandSession) {
+	session.LastCommandId = operation.OpId
+	session.CommandTerm = term
+	session.Err = OK
+	switch operation.Type {
+	case GetOp:
+		session.Value = kv.stateMachine[operation.Key]
+		//kv.Session.Store(operation.ClerkId, session)
+		break
+	case PutOp:
+		kv.stateMachine[operation.Key] = operation.Value
+		session.Value = operation.Value
+		kv.Session[operation.ClerkId] = session
+		break
+	case AppendOp:
+		kv.stateMachine[operation.Key] += operation.Value
+		session.Value = kv.stateMachine[operation.Key]
+		kv.Session[operation.ClerkId] = session
+		break
+	}
+	return
+}
+
+func (kv *KVServer) checkDoSnapshot() {
+	kv.mu.Lock()
+	if kv.maxraftstate > 0 && kv.rf.Persister.RaftStateSize() >= kv.maxraftstate {
+		w := new(bytes.Buffer)
+		e := labgob.NewEncoder(w)
+		e.Encode(kv.lastApplied)
+		e.Encode(kv.stateMachine)
+		e.Encode(kv.Session)
+		lastApplied := kv.lastApplied
+		kv.mu.Unlock()
+		go kv.rf.Snapshot(lastApplied, w.Bytes())
+		return
+	}
+	kv.mu.Unlock()
+}
+
+func (kv *KVServer) ReadSnapshot(snapshot []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	if snapshot == nil || len(snapshot) < 1 { // bootstrap without any state?
 		return
 	}
@@ -321,15 +310,17 @@ func (kv *KVServer) DoSnapshot(snapshot []byte) {
 	d := labgob.NewDecoder(r)
 	var lastApplied int
 	var hashTable map[string]string
-	var m map[interface{}]interface{}
-	if d.Decode(&lastApplied) != nil || d.Decode(&hashTable) != nil || d.Decode(&m) != nil {
+	var session map[int64]CommandSession
+	if d.Decode(&lastApplied) != nil || d.Decode(&hashTable) != nil || d.Decode(&session) != nil {
 		log.Fatalf("%v Decode error %v\n", d, snapshot)
 	} else {
-		kv.hashTable = hashTable
-		kv.lastApplied = lastApplied
-		for k, v := range m {
-			kv.Session.Store(k, v)
+		if lastApplied <= kv.lastApplied {
+			DPrintf("Kvraft ID: %d ReadSnapshot, lastApplied: %d, kv.lastApplied: %d, 大失败！\n", kv.me, lastApplied, kv.lastApplied)
+			return
 		}
+		kv.stateMachine = hashTable
+		kv.lastApplied = lastApplied
+		kv.Session = session
 	}
 }
 
@@ -354,13 +345,15 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
-	kv.hashTable = make(map[string]string)
+	kv.stateMachine = make(map[string]string)
+	kv.Session = make(map[int64]CommandSession)
+	kv.notifyChans = make(map[int]*chan CommandSession)
 
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-	kv.DoSnapshot(persister.ReadSnapshot())
+	kv.ReadSnapshot(persister.ReadSnapshot())
 	// You may need initialization code here.
 	go kv.ListenApplyCh()
 
