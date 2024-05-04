@@ -1,17 +1,45 @@
 package shardkv
 
-
-import "6.5840/labrpc"
+import (
+	"6.5840/labrpc"
+	"6.5840/shardctrler"
+	"bytes"
+	"log"
+	"time"
+)
 import "6.5840/raft"
 import "sync"
 import "6.5840/labgob"
 
+const Debug = false
+const (
+	HandleOpTimeOut = time.Millisecond * 500
+)
 
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+	return
+}
+
+type OpType int
+
+const (
+	GetOp OpType = iota
+	PutOp
+	AppendOp
+)
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Type    OpType
+	OpId    int64
+	ClerkId int64
+	Key     string
+	Value   string
 }
 
 type ShardKV struct {
@@ -25,15 +53,129 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	mck         *shardctrler.Clerk
+	lastApplied int // 防止有旧的提交又apply进状态机了
+
+	// Your definitions here.
+	stateMachine map[string]string
+	Session      map[int64]CommandSession
+	notifyChans  map[int]*chan CommandSession
 }
 
+type CommandSession struct {
+	LastCommandId int64
+	Value         string
+	Err           Err
+	CommandTerm   int
+}
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	DPrintf("ID: %d Receive Get\n", kv.me)
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	kv.mu.Lock()
+	config := kv.mck.Query(-1)
+	kv.mu.Unlock()
+	shard := key2shard(args.Key)
+	gid := config.Shards[shard]
+	if kv.gid != gid {
+		reply.Err = ErrWrongGroup
+		return
+	}
+	DPrintf("ID: %d Receive Get\n", kv.me)
+	option := Op{
+		ClerkId: args.ClerkId,
+		OpId:    args.CommandId,
+		Type:    GetOp,
+		Key:     args.Key,
+	}
+	res := kv.handleOp(option)
+	reply.Err = res.Err
+	reply.Value = res.Value
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	DPrintf("ID: %d Receive PutAppend\n", kv.me)
+	defer DPrintf("ID: %d Reply PutAppend: %v\n", kv.me, reply)
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	kv.mu.Lock()
+	config := kv.mck.Query(-1)
+	kv.mu.Unlock()
+	shard := key2shard(args.Key)
+	gid := config.Shards[shard]
+	if kv.gid != gid {
+		reply.Err = ErrWrongGroup
+		return
+	}
+
+	kv.mu.Lock()
+	if res, ok := kv.Session[args.ClerkId]; ok {
+		if res.LastCommandId == args.CommandId && res.Err == OK {
+			reply.Err = OK
+			kv.mu.Unlock()
+			return
+		}
+	}
+	kv.mu.Unlock()
+	option := Op{
+		ClerkId: args.ClerkId,
+		OpId:    args.CommandId,
+		Key:     args.Key,
+		Value:   args.Value,
+	}
+	if args.Op == "Put" {
+		option.Type = PutOp
+	} else {
+		option.Type = AppendOp
+	}
+
+	res := kv.handleOp(option)
+	reply.Err = res.Err
+}
+
+func (kv *ShardKV) handleOp(operation Op) (result CommandSession) {
+	//DPrintf("%d 准备添加ClerckId: %v, OpId: %v 到raft里\n", kv.me, operation.ClerkId, operation.OpId)
+	index, term, isLeader := kv.rf.Start(operation)
+	if !isLeader {
+		result.Err = ErrWrongLeader
+		return
+	}
+	//tt := time.Now()
+	kv.mu.Lock()
+	newCh := make(chan CommandSession)
+	kv.notifyChans[index] = &newCh
+	kv.mu.Unlock()
+
+	defer func() {
+		kv.mu.Lock()
+		delete(kv.notifyChans, index)
+		close(newCh)
+		kv.mu.Unlock()
+		//log.Printf("time: %v", time.Since(tt))
+	}()
+
+	select {
+	case <-time.After(HandleOpTimeOut):
+		result.Err = ErrTimeOut
+		return
+	case msg, success := <-newCh:
+		//DPrintf("%d 接收到ClerckId: %v, OpId: %v, Index: %v,"+
+		//"result: %v, commandTerm: %d, term: %d\n", kv.me, operation.ClerkId, operation.OpId, index, msg.Err, msg.CommandTerm, term)
+		if success && msg.CommandTerm == term {
+			result = msg
+			return
+		} else {
+			result.Err = ErrTimeOut
+			return
+		}
+	}
 }
 
 // the tester calls Kill() when a ShardKV instance won't
@@ -45,6 +187,135 @@ func (kv *ShardKV) Kill() {
 	// Your code here, if desired.
 }
 
+func (kv *ShardKV) ListenApplyCh() {
+	for {
+		select {
+		case applyMsg := <-kv.applyCh:
+			if applyMsg.CommandValid {
+				DPrintf("Kvraft: ID: %d, GetCommandApplyMsg, Index: %d\n", kv.me, applyMsg.CommandIndex)
+				kv.parseApplyMsgToCommand(&applyMsg)
+				kv.checkDoSnapshot() // 检查是否需要执行快照
+			} else if applyMsg.SnapshotValid {
+				DPrintf("Kvraft: ID: %d, GetSnapshotApplyMsg, Index: %d\n", kv.me, applyMsg.SnapshotIndex)
+				// 处理快照
+				kv.ReadSnapshot(applyMsg.Snapshot)
+			} else {
+				DPrintf("ApplyMsg Type Fault!!!\n")
+			}
+		}
+	}
+}
+
+func (kv *ShardKV) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	// 可能会有旧的applyMsg进来
+	DPrintf("ID: %d parseApplyMsgToCommand\n", kv.me)
+	if applyMsg.CommandIndex <= kv.lastApplied {
+		return
+	}
+	kv.lastApplied = applyMsg.CommandIndex
+	var response CommandSession
+	command, _ := applyMsg.Command.(Op)
+	if command.Type == AppendOp {
+		DPrintf("Id: %d ParseApplyMsgToCommandIndex: %d clerkId: %v, opId: %v, key: %v, value: %v\n",
+			kv.me, applyMsg.CommandIndex, command.ClerkId, command.OpId, command.Key, command.Value)
+	}
+	if command.Type != GetOp && kv.isDuplicateRequest(command.ClerkId, command.OpId) {
+		command, _ := kv.Session[command.ClerkId]
+		response = command
+		DPrintf("isDuplicateRequest")
+	} else {
+		response = kv.executeStateMachine(&command, applyMsg.Term)
+	}
+
+	// only notify related channel for currentTerm's log when node is leader
+	if currentTerm, isLeader := kv.rf.GetState(); isLeader && applyMsg.Term == currentTerm {
+		response.CommandTerm = applyMsg.Term
+		DPrintf("%d 准备返回一条response给commandIndex: %d\n", kv.me, applyMsg.CommandIndex)
+		if ch := kv.notifyChans[applyMsg.CommandIndex]; ch != nil {
+			DPrintf("%d Apply response:Term: %v commandId: %v err: %v to ch\n",
+				kv.me, response.CommandTerm, response.LastCommandId, response.Err)
+			*ch <- response // 注意这里使用 *ch 来解引用指针
+		} else {
+			// 可能需要处理 nil 指针的情况
+			DPrintf("-----Channel is nil at index: %d\n", applyMsg.CommandIndex)
+		}
+	}
+}
+
+func (kv *ShardKV) isDuplicateRequest(clerkId int64, opId int64) bool {
+	if res, ok := kv.Session[clerkId]; ok {
+		if res.LastCommandId == opId {
+			return true
+		}
+	}
+	return false
+}
+
+func (kv *ShardKV) executeStateMachine(operation *Op, term int) (session CommandSession) {
+	DPrintf("ID: %d executeStateMachine\n", kv.me)
+	session.LastCommandId = operation.OpId
+	session.CommandTerm = term
+	session.Err = OK
+	switch operation.Type {
+	case GetOp:
+		session.Value = kv.stateMachine[operation.Key]
+		//kv.Session.Store(operation.ClerkId, session)
+		break
+	case PutOp:
+		kv.stateMachine[operation.Key] = operation.Value
+		session.Value = operation.Value
+		kv.Session[operation.ClerkId] = session
+		break
+	case AppendOp:
+		kv.stateMachine[operation.Key] += operation.Value
+		session.Value = kv.stateMachine[operation.Key]
+		kv.Session[operation.ClerkId] = session
+		break
+	}
+	return
+}
+
+func (kv *ShardKV) checkDoSnapshot() {
+	kv.mu.Lock()
+	if kv.maxraftstate > 0 && kv.rf.Persister.RaftStateSize() >= kv.maxraftstate {
+		w := new(bytes.Buffer)
+		e := labgob.NewEncoder(w)
+		e.Encode(kv.lastApplied)
+		e.Encode(kv.stateMachine)
+		e.Encode(kv.Session)
+		lastApplied := kv.lastApplied
+		kv.mu.Unlock()
+		go kv.rf.Snapshot(lastApplied, w.Bytes())
+		return
+	}
+	kv.mu.Unlock()
+}
+
+func (kv *ShardKV) ReadSnapshot(snapshot []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if snapshot == nil || len(snapshot) < 1 { // bootstrap without any state?
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	var lastApplied int
+	var hashTable map[string]string
+	var session map[int64]CommandSession
+	if d.Decode(&lastApplied) != nil || d.Decode(&hashTable) != nil || d.Decode(&session) != nil {
+		log.Fatalf("%v Decode error %v\n", d, snapshot)
+	} else {
+		if lastApplied <= kv.lastApplied {
+			DPrintf("Kvraft ID: %d ReadSnapshot, lastApplied: %d, kv.lastApplied: %d, 大失败！\n", kv.me, lastApplied, kv.lastApplied)
+			return
+		}
+		kv.stateMachine = hashTable
+		kv.lastApplied = lastApplied
+		kv.Session = session
+	}
+}
 
 // servers[] contains the ports of the servers in this group.
 //
@@ -76,6 +347,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(CommandSession{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -85,13 +357,18 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.ctrlers = ctrlers
 
 	// Your initialization code here.
+	kv.stateMachine = make(map[string]string)
+	kv.Session = make(map[int64]CommandSession)
+	kv.notifyChans = make(map[int]*chan CommandSession)
 
 	// Use something like this to talk to the shardctrler:
-	// kv.mck = shardctrler.MakeClerk(kv.ctrlers)
+	kv.mck = shardctrler.MakeClerk(kv.ctrlers)
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	kv.ReadSnapshot(persister.ReadSnapshot())
+	go kv.ListenApplyCh()
 
 	return kv
 }
