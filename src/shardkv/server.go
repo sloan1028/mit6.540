@@ -23,19 +23,11 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-type OpType int
-
-const (
-	GetOp OpType = iota
-	PutOp
-	AppendOp
-)
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Type    OpType
+	Type    Operation
 	OpId    int64
 	ClerkId int64
 	Key     string
@@ -69,7 +61,7 @@ type CommandSession struct {
 	CommandTerm   int
 }
 
-func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
+func (kv *ShardKV) Get(args *CommandRequest, reply *CommandResponse) {
 	// Your code here.
 	DPrintf("ID: %d Receive Get\n", kv.me)
 	if _, isLeader := kv.rf.GetState(); !isLeader {
@@ -97,7 +89,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	reply.Value = res.Value
 }
 
-func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+func (kv *ShardKV) PutAppend(args *CommandRequest, reply *CommandResponse) {
 	// Your code here.
 	DPrintf("ID: %d Receive PutAppend\n", kv.me)
 	defer DPrintf("ID: %d Reply PutAppend: %v\n", kv.me, reply)
@@ -129,11 +121,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		OpId:    args.CommandId,
 		Key:     args.Key,
 		Value:   args.Value,
-	}
-	if args.Op == "Put" {
-		option.Type = PutOp
-	} else {
-		option.Type = AppendOp
+		Type:    args.Op,
 	}
 
 	res := kv.handleOp(option)
@@ -217,10 +205,6 @@ func (kv *ShardKV) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
 	kv.lastApplied = applyMsg.CommandIndex
 	var response CommandSession
 	command, _ := applyMsg.Command.(Op)
-	if command.Type == AppendOp {
-		DPrintf("Id: %d ParseApplyMsgToCommandIndex: %d clerkId: %v, opId: %v, key: %v, value: %v\n",
-			kv.me, applyMsg.CommandIndex, command.ClerkId, command.OpId, command.Key, command.Value)
-	}
 	if command.Type != GetOp && kv.isDuplicateRequest(command.ClerkId, command.OpId) {
 		command, _ := kv.Session[command.ClerkId]
 		response = command

@@ -19,12 +19,18 @@ const (
 
 type Err string
 
-// Put or Append
-type PutAppendArgs struct {
-	// You'll have to add definitions here.
+const (
+	GetOp Operation = iota
+	PutOp
+	AppendOp
+)
+
+type Operation int
+
+type CommandRequest struct {
 	Key       string
 	Value     string
-	Op        string // "Put" or "Append"
+	Op        Operation // "Put" or "Append" or "Get"
 	CommandId int64
 	ClerkId   int64
 	// You'll have to add definitions here.
@@ -32,18 +38,7 @@ type PutAppendArgs struct {
 	// otherwise RPC will break.
 }
 
-type PutAppendReply struct {
-	Err Err
-}
-
-type GetArgs struct {
-	Key       string
-	CommandId int64
-	ClerkId   int64
-	// You'll have to add definitions here.
-}
-
-type GetReply struct {
+type CommandResponse struct {
 	Err   Err
 	Value string
 }
