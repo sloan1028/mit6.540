@@ -68,12 +68,7 @@ func (ck *Clerk) Command(request *CommandRequest) string {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply CommandResponse
-				var ok bool
-				if request.Op == GetOp {
-					ok = srv.Call("ShardKV.Get", request, &reply)
-				} else {
-					ok = srv.Call("ShardKV.PutAppend", request, &reply)
-				}
+				ok := srv.Call("ShardKV.Command", request, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 					ck.commandId++
 					return reply.Value

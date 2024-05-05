@@ -61,9 +61,7 @@ type CommandSession struct {
 	CommandTerm   int
 }
 
-func (kv *ShardKV) Get(args *CommandRequest, reply *CommandResponse) {
-	// Your code here.
-	DPrintf("ID: %d Receive Get\n", kv.me)
+func (kv *ShardKV) Command(args *CommandRequest, reply *CommandResponse) {
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
 		return
@@ -77,45 +75,17 @@ func (kv *ShardKV) Get(args *CommandRequest, reply *CommandResponse) {
 		reply.Err = ErrWrongGroup
 		return
 	}
-	DPrintf("ID: %d Receive Get\n", kv.me)
-	option := Op{
-		ClerkId: args.ClerkId,
-		OpId:    args.CommandId,
-		Type:    GetOp,
-		Key:     args.Key,
-	}
-	res := kv.handleOp(option)
-	reply.Err = res.Err
-	reply.Value = res.Value
-}
-
-func (kv *ShardKV) PutAppend(args *CommandRequest, reply *CommandResponse) {
-	// Your code here.
-	DPrintf("ID: %d Receive PutAppend\n", kv.me)
-	defer DPrintf("ID: %d Reply PutAppend: %v\n", kv.me, reply)
-	if _, isLeader := kv.rf.GetState(); !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-	kv.mu.Lock()
-	config := kv.mck.Query(-1)
-	kv.mu.Unlock()
-	shard := key2shard(args.Key)
-	gid := config.Shards[shard]
-	if kv.gid != gid {
-		reply.Err = ErrWrongGroup
-		return
-	}
-
-	kv.mu.Lock()
-	if res, ok := kv.Session[args.ClerkId]; ok {
-		if res.LastCommandId == args.CommandId && res.Err == OK {
-			reply.Err = OK
-			kv.mu.Unlock()
-			return
+	if args.Op != GetOp {
+		kv.mu.Lock()
+		if res, ok := kv.Session[args.ClerkId]; ok {
+			if res.LastCommandId == args.CommandId && res.Err == OK {
+				reply.Err = OK
+				kv.mu.Unlock()
+				return
+			}
 		}
+		kv.mu.Unlock()
 	}
-	kv.mu.Unlock()
 	option := Op{
 		ClerkId: args.ClerkId,
 		OpId:    args.CommandId,
@@ -123,9 +93,9 @@ func (kv *ShardKV) PutAppend(args *CommandRequest, reply *CommandResponse) {
 		Value:   args.Value,
 		Type:    args.Op,
 	}
-
 	res := kv.handleOp(option)
 	reply.Err = res.Err
+	reply.Value = res.Value
 }
 
 func (kv *ShardKV) handleOp(operation Op) (result CommandSession) {
@@ -135,7 +105,6 @@ func (kv *ShardKV) handleOp(operation Op) (result CommandSession) {
 		result.Err = ErrWrongLeader
 		return
 	}
-	//tt := time.Now()
 	kv.mu.Lock()
 	newCh := make(chan CommandSession)
 	kv.notifyChans[index] = &newCh
@@ -146,7 +115,6 @@ func (kv *ShardKV) handleOp(operation Op) (result CommandSession) {
 		delete(kv.notifyChans, index)
 		close(newCh)
 		kv.mu.Unlock()
-		//log.Printf("time: %v", time.Since(tt))
 	}()
 
 	select {
