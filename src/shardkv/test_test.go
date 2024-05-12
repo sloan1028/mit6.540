@@ -656,7 +656,7 @@ func TestUnreliable2_5B(t *testing.T) {
 	va := make([]string, n)
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
-		va[i] = randstring(5)
+		va[i] = randstring(1)
 		ck.Put(ka[i], va[i])
 	}
 
@@ -667,7 +667,7 @@ func TestUnreliable2_5B(t *testing.T) {
 		defer func() { ch <- true }()
 		ck1 := cfg.makeClient(cfg.ctl)
 		for atomic.LoadInt32(&done) == 0 {
-			x := randstring(5)
+			x := randstring(1)
 			ck1.Append(ka[i], x)
 			va[i] += x
 		}

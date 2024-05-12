@@ -30,7 +30,7 @@ type Operation int
 type CommandRequest struct {
 	Key       string
 	Value     string
-	Op        Operation // "Put" or "Append" or "Get"
+	Op        Operation
 	CommandId int64
 	ClerkId   int64
 	// You'll have to add definitions here.
@@ -41,4 +41,18 @@ type CommandRequest struct {
 type CommandResponse struct {
 	Err   Err
 	Value string
+}
+
+type MigrateArgs struct {
+	Gid       int
+	ConfigNum int
+	Shard     int
+}
+
+type MigrateReply struct {
+	Err            Err
+	ConfigNum      int
+	Shard          int
+	DB             map[string]string
+	Client2Session map[int64]CommandSession
 }

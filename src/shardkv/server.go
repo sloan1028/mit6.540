@@ -45,6 +45,7 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	cfg         shardctrler.Config
 	mck         *shardctrler.Clerk
 	lastApplied int // 防止有旧的提交又apply进状态机了
 
@@ -52,6 +53,10 @@ type ShardKV struct {
 	stateMachine map[string]string
 	Session      map[int64]CommandSession
 	notifyChans  map[int]*chan CommandSession
+
+	toOutShards map[int]map[int]map[string]string
+	comInShards map[int]int  // Shard->ConfigNum这个应该是用来看新配置下有哪些Shard需要新增，以及他们的ConfigNum号
+	myShards    map[int]bool // 用来维护查看当前这个Group掌管了哪些Shard
 }
 
 type CommandSession struct {
@@ -66,11 +71,11 @@ func (kv *ShardKV) Command(args *CommandRequest, reply *CommandResponse) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	kv.mu.Lock()
-	config := kv.mck.Query(-1)
-	kv.mu.Unlock()
 	shard := key2shard(args.Key)
-	gid := config.Shards[shard]
+	kv.mu.Lock()
+	gid := kv.cfg.Shards[shard]
+	kv.mu.Unlock()
+
 	if kv.gid != gid {
 		reply.Err = ErrWrongGroup
 		return
@@ -147,16 +152,20 @@ func (kv *ShardKV) ListenApplyCh() {
 	for {
 		select {
 		case applyMsg := <-kv.applyCh:
-			if applyMsg.CommandValid {
-				DPrintf("Kvraft: ID: %d, GetCommandApplyMsg, Index: %d\n", kv.me, applyMsg.CommandIndex)
-				kv.parseApplyMsgToCommand(&applyMsg)
-				kv.checkDoSnapshot() // 检查是否需要执行快照
-			} else if applyMsg.SnapshotValid {
-				DPrintf("Kvraft: ID: %d, GetSnapshotApplyMsg, Index: %d\n", kv.me, applyMsg.SnapshotIndex)
-				// 处理快照
-				kv.ReadSnapshot(applyMsg.Snapshot)
+			if cfg, ok := applyMsg.Command.(shardctrler.Config); ok {
+				kv.applyCfg(cfg)
+			} else if migrationData, ok := applyMsg.Command.(MigrateReply); ok {
+				kv.applyShard(migrationData)
 			} else {
-				DPrintf("ApplyMsg Type Fault!!!\n")
+				if applyMsg.CommandValid {
+					kv.parseApplyMsgToCommand(&applyMsg)
+					kv.checkDoSnapshot() // 检查是否需要执行快照
+				} else if applyMsg.SnapshotValid {
+					// 处理快照
+					kv.ReadSnapshot(applyMsg.Snapshot)
+				} else {
+					DPrintf("ApplyMsg Type Fault!!!\n")
+				}
 			}
 		}
 	}
@@ -166,29 +175,36 @@ func (kv *ShardKV) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	// 可能会有旧的applyMsg进来
-	DPrintf("ID: %d parseApplyMsgToCommand\n", kv.me)
 	if applyMsg.CommandIndex <= kv.lastApplied {
 		return
 	}
 	kv.lastApplied = applyMsg.CommandIndex
 	var response CommandSession
 	command, _ := applyMsg.Command.(Op)
-	if command.Type != GetOp && kv.isDuplicateRequest(command.ClerkId, command.OpId) {
-		command, _ := kv.Session[command.ClerkId]
-		response = command
-		DPrintf("isDuplicateRequest")
+	shard := key2shard(command.Key)
+	if _, ok := kv.myShards[shard]; !ok {
+		response.Err = ErrWrongGroup
 	} else {
-		response = kv.executeStateMachine(&command, applyMsg.Term)
+		if command.Type != GetOp && kv.isDuplicateRequest(command.ClerkId, command.OpId) {
+			command, _ := kv.Session[command.ClerkId]
+			response = command
+		} else {
+			DPrintf("GID: %d, executeStateMachine ,lastcommand %v\n", kv.gid, kv.Session[command.ClerkId])
+			response = kv.executeStateMachine(&command, applyMsg.Term)
+		}
 	}
 
 	// only notify related channel for currentTerm's log when node is leader
 	if currentTerm, isLeader := kv.rf.GetState(); isLeader && applyMsg.Term == currentTerm {
 		response.CommandTerm = applyMsg.Term
-		DPrintf("%d 准备返回一条response给commandIndex: %d\n", kv.me, applyMsg.CommandIndex)
-		if ch := kv.notifyChans[applyMsg.CommandIndex]; ch != nil {
-			DPrintf("%d Apply response:Term: %v commandId: %v err: %v to ch\n",
-				kv.me, response.CommandTerm, response.LastCommandId, response.Err)
-			*ch <- response // 注意这里使用 *ch 来解引用指针
+		ch := kv.notifyChans[applyMsg.CommandIndex]
+		if ch != nil {
+			select {
+			case *ch <- response: // 注意这里使用 *ch 来解引用指针
+				// 成功发送
+			case <-time.After(time.Millisecond * 100): // 发送超时
+				// 超时处理
+			}
 		} else {
 			// 可能需要处理 nil 指针的情况
 			DPrintf("-----Channel is nil at index: %d\n", applyMsg.CommandIndex)
@@ -206,27 +222,88 @@ func (kv *ShardKV) isDuplicateRequest(clerkId int64, opId int64) bool {
 }
 
 func (kv *ShardKV) executeStateMachine(operation *Op, term int) (session CommandSession) {
-	DPrintf("ID: %d executeStateMachine\n", kv.me)
 	session.LastCommandId = operation.OpId
 	session.CommandTerm = term
 	session.Err = OK
 	switch operation.Type {
 	case GetOp:
 		session.Value = kv.stateMachine[operation.Key]
-		//kv.Session.Store(operation.ClerkId, session)
 		break
 	case PutOp:
 		kv.stateMachine[operation.Key] = operation.Value
 		session.Value = operation.Value
+		DPrintf("GID: %d, Put key: %v, value: %v, clerkId: %d, opId: %v\n",
+			kv.gid, operation.Key, operation.Value, operation.ClerkId, operation.OpId)
 		kv.Session[operation.ClerkId] = session
 		break
 	case AppendOp:
 		kv.stateMachine[operation.Key] += operation.Value
+		DPrintf("GID: %d, Append key: %v, value: %v, clerkId: %d, opId: %v\n",
+			kv.gid, operation.Key, kv.stateMachine[operation.Key], operation.ClerkId, operation.OpId)
 		session.Value = kv.stateMachine[operation.Key]
 		kv.Session[operation.ClerkId] = session
 		break
 	}
 	return
+}
+
+func (kv *ShardKV) applyShard(migrateData MigrateReply) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if migrateData.ConfigNum != kv.cfg.Num-1 { //我当前需要的migrateData,在发送者那里应该是我当前的cfgNum-1
+		return
+	}
+	delete(kv.comInShards, migrateData.Shard)
+	if _, ok := kv.myShards[migrateData.Shard]; !ok {
+		kv.myShards[migrateData.Shard] = true
+		for k, v := range migrateData.DB {
+			kv.stateMachine[k] = v
+		}
+		for client, session := range migrateData.Client2Session {
+			if kv.Session[client].LastCommandId <= session.LastCommandId {
+				kv.Session[client] = session
+			}
+		}
+	}
+}
+
+// 收到新的Configuration后，判断自己要丢掉的Shard和要接收的Shard
+func (kv *ShardKV) applyCfg(cfg shardctrler.Config) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if cfg.Num <= kv.cfg.Num {
+		return
+	}
+	oldCfg, toOutShard := kv.cfg, kv.myShards
+	kv.myShards, kv.cfg = make(map[int]bool), cfg
+	for shard, gid := range cfg.Shards {
+		if gid != kv.gid {
+			continue
+		}
+		if _, ok := toOutShard[shard]; ok || oldCfg.Num == 0 {
+			// 新配置里的该shard，在老配置也被当前节点持有 -> 当前的节点可以继续持有这个shard，啥都不用干
+			kv.myShards[shard] = true
+			delete(toOutShard, shard)
+		} else {
+			// 新配置里的该shard，在老配置里不持有 -> 需要pull到这个shard Data
+			kv.comInShards[shard] = oldCfg.Num
+		}
+	}
+	// 把需要丢掉的Shard拉出来，在主状态机中删掉
+	if len(toOutShard) > 0 {
+		kv.toOutShards[oldCfg.Num] = make(map[int]map[string]string)
+		for shard := range toOutShard {
+			//DPrintf("ID: %d toOutShard ConfigNum: %d, shard: %d\n", kv.me, oldCfg.Num, shard)
+			outDb := make(map[string]string)
+			for k, v := range kv.stateMachine {
+				if key2shard(k) == shard {
+					outDb[k] = v
+					delete(kv.stateMachine, k)
+				}
+			}
+			kv.toOutShards[oldCfg.Num][shard] = outDb
+		}
+	}
 }
 
 func (kv *ShardKV) checkDoSnapshot() {
@@ -237,6 +314,10 @@ func (kv *ShardKV) checkDoSnapshot() {
 		e.Encode(kv.lastApplied)
 		e.Encode(kv.stateMachine)
 		e.Encode(kv.Session)
+		e.Encode(kv.comInShards)
+		e.Encode(kv.toOutShards)
+		e.Encode(kv.myShards)
+		e.Encode(kv.cfg)
 		lastApplied := kv.lastApplied
 		kv.mu.Unlock()
 		go kv.rf.Snapshot(lastApplied, w.Bytes())
@@ -256,17 +337,97 @@ func (kv *ShardKV) ReadSnapshot(snapshot []byte) {
 	var lastApplied int
 	var hashTable map[string]string
 	var session map[int64]CommandSession
-	if d.Decode(&lastApplied) != nil || d.Decode(&hashTable) != nil || d.Decode(&session) != nil {
+	var comInShards map[int]int
+	var toOutShards map[int]map[int]map[string]string
+	var myShards map[int]bool
+	var cfg shardctrler.Config
+	if d.Decode(&lastApplied) != nil || d.Decode(&hashTable) != nil || d.Decode(&session) != nil ||
+		d.Decode(&comInShards) != nil || d.Decode(&toOutShards) != nil || d.Decode(&myShards) != nil ||
+		d.Decode(&cfg) != nil {
 		log.Fatalf("%v Decode error %v\n", d, snapshot)
 	} else {
 		if lastApplied <= kv.lastApplied {
-			DPrintf("Kvraft ID: %d ReadSnapshot, lastApplied: %d, kv.lastApplied: %d, 大失败！\n", kv.me, lastApplied, kv.lastApplied)
+			//DPrintf("Kvraft ID: %d ReadSnapshot, lastApplied: %d, kv.lastApplied: %d, 大失败！\n", kv.me, lastApplied, kv.lastApplied)
 			return
 		}
+		kv.comInShards = comInShards
+		kv.toOutShards = toOutShards
+		kv.myShards = myShards
+		kv.cfg = cfg
 		kv.stateMachine = hashTable
 		kv.lastApplied = lastApplied
 		kv.Session = session
 	}
+}
+
+func (kv *ShardKV) PollNewCfg() {
+	kv.mu.Lock()
+	// 当前更改Configuration还未结束，不要去再次拉新
+	if len(kv.comInShards) > 0 {
+		kv.mu.Unlock()
+		return
+	}
+	next := kv.cfg.Num + 1
+	kv.mu.Unlock()
+	cfg := kv.mck.Query(next)
+	if cfg.Num == next {
+		kv.rf.Start(cfg)
+	}
+}
+
+func (kv *ShardKV) ShardMigration(args *MigrateArgs, reply *MigrateReply) {
+	reply.Shard, reply.ConfigNum = args.Shard, args.ConfigNum
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	reply.Err = ErrWrongGroup
+	if args.ConfigNum >= kv.cfg.Num { // 为什么==也要return? 因为需要的args的configNum来自oldConfigNum，如果相等说明本方也落后了
+		return
+	}
+	reply.Err = OK
+	reply.DB = make(map[string]string)
+	reply.Client2Session = make(map[int64]CommandSession)
+	for clientId, session := range kv.Session {
+		reply.Client2Session[clientId] = session
+	}
+	for k, v := range kv.toOutShards[args.ConfigNum][args.Shard] {
+		reply.DB[k] = v
+	}
+	//DPrintf("ID: %d, replyDb: %v, configNum: %d, shard: %d\n", kv.me, reply.DB, args.ConfigNum, args.Shard)
+}
+
+func (kv *ShardKV) tryPullShard() {
+	kv.mu.Lock()
+	if len(kv.comInShards) == 0 {
+		kv.mu.Unlock()
+		return
+	}
+	var wait sync.WaitGroup
+	for shard, idx := range kv.comInShards {
+		cfg := kv.mck.Query(idx)
+		wait.Add(1)
+		go func(shard int, cfg shardctrler.Config) {
+			defer wait.Done()
+			args := MigrateArgs{kv.gid, cfg.Num, shard}
+			gid := cfg.Shards[shard]
+			for _, server := range cfg.Groups[gid] {
+				srv := kv.make_end(server)
+				reply := MigrateReply{}
+				if ok := srv.Call("ShardKV.ShardMigration", &args, &reply); ok {
+					if reply.Err == OK {
+						kv.rf.Start(reply)
+					}
+				}
+			}
+		}(shard, cfg)
+	}
+	kv.mu.Unlock()
+	wait.Wait()
 }
 
 // servers[] contains the ports of the servers in this group.
@@ -300,6 +461,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 	labgob.Register(CommandSession{})
+	labgob.Register(shardctrler.Config{})
+	labgob.Register(MigrateReply{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -312,6 +475,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.stateMachine = make(map[string]string)
 	kv.Session = make(map[int64]CommandSession)
 	kv.notifyChans = make(map[int]*chan CommandSession)
+	kv.toOutShards = make(map[int]map[int]map[string]string)
+	kv.comInShards = make(map[int]int)
+	kv.myShards = make(map[int]bool)
 
 	// Use something like this to talk to the shardctrler:
 	kv.mck = shardctrler.MakeClerk(kv.ctrlers)
@@ -321,6 +487,17 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	kv.ReadSnapshot(persister.ReadSnapshot())
 	go kv.ListenApplyCh()
+	go kv.Monitor(kv.PollNewCfg, 50*time.Millisecond) // PollNewCfg只做一件事：Leader把新配置信息拉到Raft中进行同步
+	go kv.Monitor(kv.tryPullShard, 50*time.Millisecond)
 
 	return kv
+}
+
+func (kv *ShardKV) Monitor(action func(), timeout time.Duration) {
+	for {
+		if _, isLeader := kv.rf.GetState(); isLeader {
+			action()
+		}
+		time.Sleep(timeout)
+	}
 }
