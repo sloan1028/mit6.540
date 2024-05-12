@@ -56,3 +56,13 @@ type MigrateReply struct {
 	DB             map[string]string
 	Client2Session map[int64]CommandSession
 }
+
+type GcClearArgs struct {
+	Gid       int
+	ConfigNum int
+	Shard     int
+}
+
+type GcClearReply struct {
+	Err Err
+}
