@@ -19,15 +19,13 @@ package raft
 
 import (
 	"6.5840/labgob"
+	"6.5840/labrpc"
 	"bytes"
-	log2 "log"
+	"log"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	//	"6.5840/labgob"
-	"6.5840/labrpc"
 )
 
 type StateType int
@@ -146,31 +144,31 @@ func (rf *Raft) getLogOffset() int {
 			return rf.log[0].ApplyMsg.SnapshotIndex
 		}
 	}
-	log2.Fatalf("%d getLogOffset error\n", rf.me)
+	log.Fatalf("%d getLogOffset error\n", rf.me)
 	return -10086
 }
 
 func (rf *Raft) getLastLogIndex() int {
-	log := rf.log[len(rf.log)-1]
-	if log.ApplyMsg.CommandValid {
-		return log.ApplyMsg.CommandIndex
+	logEntry := rf.log[len(rf.log)-1]
+	if logEntry.ApplyMsg.CommandValid {
+		return logEntry.ApplyMsg.CommandIndex
 	}
-	if log.ApplyMsg.SnapshotValid {
-		return log.ApplyMsg.SnapshotIndex
+	if logEntry.ApplyMsg.SnapshotValid {
+		return logEntry.ApplyMsg.SnapshotIndex
 	}
-	log2.Fatalf("%d getLastLogIndex error\n", rf.me)
+	log.Fatalf("%d getLastLogIndex error\n", rf.me)
 	return -10086
 }
 
 func (rf *Raft) getLastLogTerm() int {
-	log := rf.log[len(rf.log)-1]
-	if log.ApplyMsg.CommandValid {
-		return log.ApplyMsg.Term
+	logEntry := rf.log[len(rf.log)-1]
+	if logEntry.ApplyMsg.CommandValid {
+		return logEntry.ApplyMsg.Term
 	}
-	if log.ApplyMsg.SnapshotValid {
-		return log.ApplyMsg.SnapshotTerm
+	if logEntry.ApplyMsg.SnapshotValid {
+		return logEntry.ApplyMsg.SnapshotTerm
 	}
-	log2.Fatalf("%d getLastLogTerm error\n", rf.me)
+	log.Fatalf("%d getLastLogTerm error\n", rf.me)
 	return -10086
 }
 
@@ -188,7 +186,6 @@ func (rf *Raft) getLogTerm(logIndex int) int {
 		}
 		return rf.log[0].ApplyMsg.Term
 	}
-	//log2.Fatalf("----------%d getLogTerm Error!! logIndex: %d, offset: %d, logLen: %d\n", rf.me, logIndex, offset, len(rf.log))
 	return -1
 }
 
@@ -200,8 +197,6 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (3A).
 	rf.mu.Lock()
-	//LockLog("%d GetState GetLock\n", rf.me)
-	//defer LockLog("%d GetState UnLock\n", rf.me)
 	defer rf.mu.Unlock()
 	term = rf.currentTerm
 	isleader = rf.GetStateType() == Leader
@@ -242,16 +237,16 @@ func (rf *Raft) readPersist(data []byte) {
 	d := labgob.NewDecoder(r)
 	var curTerm int
 	var voteFor int
-	var log []Log
+	var logEntries []Log
 	var SnapshotTerm int
 	var SnapshotIndex int
-	if d.Decode(&curTerm) != nil || d.Decode(&voteFor) != nil || d.Decode(&log) != nil ||
+	if d.Decode(&curTerm) != nil || d.Decode(&voteFor) != nil || d.Decode(&logEntries) != nil ||
 		d.Decode(&SnapshotTerm) != nil || d.Decode(&SnapshotIndex) != nil {
-		log2.Fatalf("%v Decode error %v\n", d, data)
+		log.Fatalf("%v Decode error %v\n", d, data)
 	} else {
 		rf.currentTerm = curTerm
 		rf.votedFor = voteFor
-		rf.log = append(rf.log, log...)
+		rf.log = append(rf.log, logEntries...)
 		if SnapshotIndex != 0 {
 			rf.log[0].ApplyMsg.CommandValid = false
 			rf.log[0].ApplyMsg.SnapshotValid = true
@@ -274,8 +269,6 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (3D).
 	rf.mu.Lock()
-	LockLog("%d Snapshot GetLock\n", rf.me)
-	defer LockLog("%d Snapshot UnLock\n", rf.me)
 	defer rf.mu.Unlock()
 	offset := rf.getLogOffset()
 	if index-offset <= 0 || index-offset >= len(rf.log) {
@@ -325,8 +318,6 @@ type InstallSnapshotReply struct {
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
-	LockLog("%d InstallSnapshot GetLock\n", rf.me)
-	defer LockLog("%d InstallSnapshot Unock\n", rf.me)
 	defer rf.mu.Unlock()
 	DPrintf("ID: %d Receive InstallSnapshot From %d, LastIndex: %d LastTerm: %d\n",
 		rf.me, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
@@ -459,8 +450,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//DPrintf("%d Reveive RequestVote From %d, Term %d\n", rf.me, args.CandidateId, args.Term)
 	// Your code here (3A, 3B).
 	rf.mu.Lock()
-	//LockLog("%d RequestVote GetLock\n", rf.me)
-	//defer LockLog("%d RequestVote unLock\n", rf.me)
 	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	if rf.currentTerm > args.Term {
@@ -549,8 +538,6 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	DPrintf("%d Recevive AppendEntries From %d, "+
-		"Term %d, lenLogs: %d\n", rf.me, args.LeaderId, args.Term, len(args.Entries))
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
@@ -565,31 +552,22 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.persist()
 	}
 
-	rf.ClearDelayTime() // 清空delayTime
-	// 注意这个清空在确认对方是Leader后就要清空
-	// 因为下面第二步如果有很多日志不一致，会花很多时间来同步信息，会把领导选举卡到超时
+	rf.ClearDelayTime() //确认对方是Leader后就要重置超时 因为下面第二步如果有很多日志不一致，会花很多时间来同步信息，会把领导选举卡到超时
 	offset := rf.getLogOffset()
 	// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	logTerm := rf.getLogTerm(args.PrevLogIndex)
-	//DPrintf("%d AppendEntries, args.PrevIndex: %d, offset: %d, lenLog: %d, lastLogIndex: %d\n",
-	//rf.me, args.PrevLogIndex, offset, len(rf.log), rf.getLastLogIndex())
 	if args.PrevLogIndex > rf.getLastLogIndex() || logTerm != args.PrevLogTerm {
 		reply.Success = false
 		if args.PrevLogIndex > rf.getLastLogIndex() || logTerm == -1 {
-			//DPrintf("%d 太短了, back Term: -1, confictIndex: %d\n", rf.me, rf.getLastLogIndex())
 			reply.ConflictTerm = -1
 			reply.ConflictIndex = rf.getLastLogIndex()
 		} else {
 			reply.ConflictTerm = logTerm
 			index := args.PrevLogIndex - 1
-			//DPrintf("args.PrevLogIndex %d \n", args.PrevLogIndex)
 			for index-offset >= 0 && rf.log[index-offset].ApplyMsg.Term == reply.ConflictTerm {
 				index--
 			}
 			reply.ConflictIndex = index
-			//DPrintf("id: %d args.PrevLogIndex: %d, rf.getLastLogIndex(): %d, offset: %d",
-			//rf.me, args.PrevLogIndex, rf.getLastLogIndex(), rf.getLogOffset())
-			//DPrintf("%d 切割到了 term: %d index %d\n", rf.me, reply.ConflictTerm, reply.ConflictIndex)
 		}
 
 		return
@@ -611,11 +589,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.log = append(rf.log, args.Entries[newEntriesPos:]...)
 		rf.persist()
 	}
-	//DPrintf("id: %d Log Entries: %v\n", rf.me, rf.log)
 	// 5.If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	rf.commitIndex = Min(args.LeaderCommit, rf.getLastLogIndex())
-	DPrintf("ID: %d commitIndex: %d, from min(leaderCommit: %d, lastLogIndex: %d), leader: %d\n",
-		rf.me, rf.commitIndex, args.LeaderCommit, rf.getLastLogIndex(), args.LeaderId)
 	rf.applyCond.Signal()
 	reply.Success = true
 	rf.currentTerm = args.Term
@@ -706,7 +681,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		}
 		prevLogIndex, prevLogTerm := nextIndex-1, 0
 		if nextIndex-1-offset >= len(rf.log) {
-			log2.Printf("id: %d, logIndex: %d offset: %d, lenLog: %d\n", rf.me, nextIndex-1, offset, len(rf.log))
+			log.Printf("id: %d, logIndex: %d offset: %d, lenLog: %d\n", rf.me, nextIndex-1, offset, len(rf.log))
 		}
 		prevLog := rf.log[nextIndex-1-offset]
 		if prevLog.ApplyMsg.CommandValid {
@@ -714,7 +689,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		} else if prevLog.ApplyMsg.SnapshotValid {
 			prevLogTerm = rf.log[nextIndex-1-offset].ApplyMsg.SnapshotTerm
 		} else {
-			log2.Fatalf("%d Find Error\n", rf.me)
+			log.Fatalf("%d Find Error\n", rf.me)
 		}
 		args := AppendEntriesArgs{
 			Term:         rf.currentTerm,
