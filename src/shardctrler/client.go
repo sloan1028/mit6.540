@@ -34,10 +34,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 
 func (ck *Clerk) Query(num int) Config {
 	args := &CommandRequest{
-		CommandId: ck.commandId,
-		ClientId:  ck.clientId,
-		Op:        Query,
-		Num:       num,
+		ClientId: ck.clientId,
+		Op:       Query,
+		Num:      num,
 	}
 	// Your code here.
 	for {
@@ -46,7 +45,6 @@ func (ck *Clerk) Query(num int) Config {
 			var reply CommandResponse
 			ok := srv.Call("ShardCtrler.Query", args, &reply)
 			if ok && reply.Err == OK {
-				ck.commandId++
 				return reply.Config
 			}
 		}

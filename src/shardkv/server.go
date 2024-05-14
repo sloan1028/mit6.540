@@ -105,7 +105,6 @@ func (kv *ShardKV) Command(args *CommandRequest, reply *CommandResponse) {
 }
 
 func (kv *ShardKV) handleOp(operation Op) (result CommandSession) {
-	//DPrintf("%d 准备添加ClerckId: %v, OpId: %v 到raft里\n", kv.me, operation.ClerkId, operation.OpId)
 	index, term, isLeader := kv.rf.Start(operation)
 	if !isLeader {
 		result.Err = ErrWrongLeader
@@ -153,12 +152,15 @@ func (kv *ShardKV) ListenApplyCh() {
 	for {
 		select {
 		case applyMsg := <-kv.applyCh:
-			if cfg, ok := applyMsg.Command.(shardctrler.Config); ok {
-				kv.applyCfg(cfg)
-			} else if migrationData, ok := applyMsg.Command.(MigrateReply); ok {
-				kv.applyShard(migrationData)
-			} else if gcClearData, ok := applyMsg.Command.(GcClearArgs); ok {
-				kv.applyGarbageCollection(gcClearData)
+			if _, ok := applyMsg.Command.(shardctrler.Config); ok {
+				kv.applyCfg(&applyMsg)
+				kv.checkDoSnapshot() // 检查是否需要执行快照
+			} else if _, ok := applyMsg.Command.(MigrateReply); ok {
+				kv.applyShard(&applyMsg)
+				kv.checkDoSnapshot() // 检查是否需要执行快照
+			} else if _, ok := applyMsg.Command.(GcClearArgs); ok {
+				kv.applyGarbageCollection(&applyMsg)
+				kv.checkDoSnapshot() // 检查是否需要执行快照
 			} else {
 				if applyMsg.CommandValid {
 					kv.parseApplyMsgToCommand(&applyMsg)
@@ -241,12 +243,14 @@ func (kv *ShardKV) executeStateMachine(operation *Op, term int) (session Command
 	return
 }
 
-func (kv *ShardKV) applyShard(migrateData MigrateReply) {
+func (kv *ShardKV) applyShard(applyMsg *raft.ApplyMsg) {
+	migrateData := applyMsg.Command.(MigrateReply)
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	if migrateData.ConfigNum != kv.cfg.Num-1 { //我当前需要的migrateData,在发送者那里应该是我当前的cfgNum-1
 		return
 	}
+	kv.lastApplied = applyMsg.CommandIndex
 	delete(kv.comInShards, migrateData.Shard)
 	if _, ok := kv.myShards[migrateData.Shard]; !ok {
 		kv.myShards[migrateData.Shard] = true
@@ -265,24 +269,39 @@ func (kv *ShardKV) applyShard(migrateData MigrateReply) {
 	}
 }
 
-func (kv *ShardKV) applyGarbageCollection(gcData GcClearArgs) {
+func (kv *ShardKV) applyGarbageCollection(applyMsg *raft.ApplyMsg) {
+	gcData := applyMsg.Command.(GcClearArgs)
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+	kv.lastApplied = applyMsg.CommandIndex
 	if _, ok := kv.toOutShards[gcData.ConfigNum]; ok {
 		delete(kv.toOutShards[gcData.ConfigNum], gcData.Shard)
 		if len(kv.toOutShards[gcData.ConfigNum]) == 0 {
 			delete(kv.toOutShards, gcData.ConfigNum)
 		}
 	}
+	response := CommandSession{Err: OK}
+	if _, isLeader := kv.rf.GetState(); isLeader {
+		if ch, ok := kv.notifyChans[applyMsg.CommandIndex]; ok {
+			select {
+			case *ch <- response: // 注意这里使用 *ch 来解引用指针
+				// 成功发送
+			case <-time.After(time.Millisecond * 100): // 发送超时
+				// 超时处理
+			}
+		}
+	}
 }
 
 // 收到新的Configuration后，判断自己要丢掉的Shard和要接收的Shard
-func (kv *ShardKV) applyCfg(cfg shardctrler.Config) {
+func (kv *ShardKV) applyCfg(applyMsg *raft.ApplyMsg) {
+	cfg := applyMsg.Command.(shardctrler.Config)
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	if cfg.Num <= kv.cfg.Num {
 		return
 	}
+	kv.lastApplied = applyMsg.CommandIndex
 	oldCfg, toOutShard := kv.cfg, kv.myShards
 	kv.myShards, kv.cfg = make(map[int]bool), cfg
 	for shard, gid := range cfg.Shards {
@@ -330,7 +349,7 @@ func (kv *ShardKV) checkDoSnapshot() {
 		e.Encode(kv.garbageList)
 		lastApplied := kv.lastApplied
 		kv.mu.Unlock()
-		DPrintf("GID: %d ,w.Bytes(): %d\n", kv.gid, len(w.Bytes()))
+		//DPrintf("GID: %d, id: %d, DoSnapshot\n", kv.gid, kv.me)
 		go kv.rf.Snapshot(lastApplied, w.Bytes())
 		return
 	}
@@ -353,9 +372,14 @@ func (kv *ShardKV) ReadSnapshot(snapshot []byte) {
 	var myShards map[int]bool
 	var garbageList map[int]map[int]bool
 	var cfg shardctrler.Config
-	if d.Decode(&lastApplied) != nil || d.Decode(&hashTable) != nil || d.Decode(&session) != nil ||
-		d.Decode(&comInShards) != nil || d.Decode(&toOutShards) != nil || d.Decode(&myShards) != nil ||
-		d.Decode(&cfg) != nil || d.Decode(&garbageList) != nil {
+	if d.Decode(&lastApplied) != nil ||
+		d.Decode(&hashTable) != nil ||
+		d.Decode(&session) != nil ||
+		d.Decode(&comInShards) != nil ||
+		d.Decode(&toOutShards) != nil ||
+		d.Decode(&myShards) != nil ||
+		d.Decode(&cfg) != nil ||
+		d.Decode(&garbageList) != nil {
 		log.Fatalf("%v Decode error %v\n", d, snapshot)
 	} else {
 		if lastApplied <= kv.lastApplied {
@@ -421,19 +445,43 @@ func (kv *ShardKV) GarbageCollection(args *GcClearArgs, reply *GcClearReply) {
 		return
 	}
 	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	if _, ok := kv.toOutShards[args.ConfigNum]; !ok {
+		kv.mu.Unlock()
 		return
 	}
 	if _, ok := kv.toOutShards[args.ConfigNum][args.Shard]; !ok {
+		kv.mu.Unlock()
 		return
 	}
+	kv.mu.Unlock()
+	reply.Err = kv.handleGC(args)
+}
+func (kv *ShardKV) handleGC(args *GcClearArgs) Err {
+	index, term, isLeader := kv.rf.Start(*args)
+	if !isLeader {
+		return ErrWrongLeader
+	}
+	kv.mu.Lock()
+	newCh := make(chan CommandSession)
+	kv.notifyChans[index] = &newCh
+	kv.mu.Unlock()
 
-	if args.ConfigNum >= kv.cfg.Num {
-		reply.Err = ErrWrongGroup
-	} else {
-		reply.Err = OK
-		kv.rf.Start(args)
+	defer func() {
+		kv.mu.Lock()
+		delete(kv.notifyChans, index)
+		close(newCh)
+		kv.mu.Unlock()
+	}()
+
+	select {
+	case <-time.After(HandleOpTimeOut):
+		return ErrTimeOut
+	case msg, success := <-newCh:
+		if success && msg.CommandTerm == term {
+			return msg.Err
+		} else {
+			return ErrTimeOut
+		}
 	}
 }
 
@@ -563,7 +611,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.ListenApplyCh()
 	go kv.Monitor(kv.PollNewCfg, 50*time.Millisecond) // PollNewCfg只做一件事：Leader把新配置信息拉到Raft中进行同步
 	go kv.Monitor(kv.tryPullShard, 50*time.Millisecond)
-	go kv.Monitor(kv.tryGcClear, 100*time.Millisecond)
+	go kv.Monitor(kv.tryGcClear, 50*time.Millisecond)
 
 	return kv
 }
