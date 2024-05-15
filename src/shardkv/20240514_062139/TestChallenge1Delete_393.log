@@ -1,0 +1,6 @@
+Test: shard deletion (challenge 1) ...
+--- FAIL: TestChallenge1Delete (22.31s)
+    test_test.go:885: snapshot + persisted Raft state are too big: 140175 > 117000
+FAIL
+exit status 1
+FAIL	6.5840/shardkv	22.352s

@@ -43,7 +43,6 @@ func Worker(mapf func(string, string) []KeyValue,
 			// 处理等待情况，如果没有需要执行的特定操作，可以留空
 		case CompleteJob:
 			os.Exit(0)
-			// todo 这个可以把通信的报错干掉
 		default:
 			// 可选：处理未知的JobType
 			panic(fmt.Sprintf("unknow JobType\n"))

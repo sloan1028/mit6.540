@@ -1,0 +1,13 @@
+Test: unreliable net, restarts, partitions, snapshots, many clients (4B) ...
+2024/05/14 05:54:11 id: 0, logIndex: 360 offset: 341, lenLog: 14
+panic: runtime error: index out of range [19] with length 14
+
+goroutine 7608 [running]:
+6.5840/raft.(*Raft).BroadCastAppendEntries(0xc000187420)
+	/home/sloan/桌面/6.5840/src/raft/raft.go:676 +0x79d
+6.5840/raft.(*Raft).GoSendAppendEntries(0xc000187420)
+	/home/sloan/桌面/6.5840/src/raft/raft.go:645 +0x35
+created by 6.5840/raft.(*Raft).ticker.func1 in goroutine 7581
+	/home/sloan/桌面/6.5840/src/raft/raft.go:820 +0x1a5
+exit status 2
+FAIL	6.5840/kvraft	12.607s

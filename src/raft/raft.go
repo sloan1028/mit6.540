@@ -222,8 +222,6 @@ func (rf *Raft) persist() {
 	e.Encode(rf.log[0].ApplyMsg.SnapshotIndex)
 	raftState := w.Bytes()
 
-	//DPrintf("rf: %d, Save State: SnapshotTerm %d, SnapshotIndex %d snapshotSize %d",
-	//rf.me, rf.log[0].ApplyMsg.SnapshotTerm, rf.log[0].ApplyMsg.SnapshotIndex, len(rf.log[0].ApplyMsg.Snapshot))
 	rf.Persister.Save(raftState, rf.log[0].ApplyMsg.Snapshot)
 }
 
@@ -256,8 +254,6 @@ func (rf *Raft) readPersist(data []byte) {
 			rf.log[0].ApplyMsg.Snapshot = rf.Persister.ReadSnapshot()
 			rf.lastApplied = SnapshotIndex
 			rf.commitIndex = SnapshotIndex
-			DPrintf("ID: %d initialize from state persisted before a crash,"+
-				"commitIndex, SnapshotIndex: %v, Term: %v", rf.me, SnapshotIndex, SnapshotTerm)
 		}
 	}
 }
@@ -297,7 +293,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	stillNeedLogs := rf.log[idx:]
 	newLog = append(newLog, stillNeedLogs...)
 	rf.log = newLog
-	DPrintf("ID: %d Do SnapShot index: %d, LogLen to %d, lastIndex: %d, lastTerm: %d\n",
+	Debug(dSnap, "ID: %d Do SnapShot index: %d, LogLen to %d, lastIndex: %d, lastTerm: %d\n",
 		rf.me, index, len(rf.log), rf.getLastLogIndex(), rf.getLastLogTerm())
 	rf.persist()
 }
@@ -319,8 +315,6 @@ type InstallSnapshotReply struct {
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("ID: %d Receive InstallSnapshot From %d, LastIndex: %d LastTerm: %d\n",
-		rf.me, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
 	reply.Term = rf.currentTerm
 	// 1.Reply immediately if term < currentTerm
 	if args.Term < rf.currentTerm {
@@ -329,10 +323,10 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	if rf.GetStateType() != Follower && args.Term >= rf.currentTerm {
 		rf.SetStateType(Follower)
 		rf.votedFor = -1
-		rf.persist()
 	}
 	rf.currentTerm = args.Term
 	rf.ClearDelayTime() // 清空delayTime
+	rf.persist()
 
 	// 过时的Snapshot不要了， 如果这里要了可能会导致超界
 	if args.LastIncludedIndex <= rf.commitIndex {
@@ -352,7 +346,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	if rf.log[0].ApplyMsg.CommandValid ||
 		(rf.log[0].ApplyMsg.SnapshotValid && rf.log[0].ApplyMsg.SnapshotIndex < args.LastIncludedIndex) {
 		rf.log[0] = newApplyMsg
-		rf.persist()
+		//rf.persist()
 	}
 	// 3. If existing log entry has same index and term as snapshot’s last included entry,
 	// retain log entries following it and reply
@@ -366,10 +360,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 			rf.log = rf.log[:1]
 			rf.log = append(rf.log, saveLog...)
 
-			DPrintf("ID: %d retain log entries size: %d , lastIndex: %d, lastTerm: %d, now commitIndex: %d\n",
-				rf.me, len(saveLog), rf.getLastLogIndex(), rf.getLastLogTerm(), args.LastIncludedIndex)
 			rf.persist()
-			//go rf.applySnapshot(&newSnapshot)
 			rf.isNeedApplyingSnapshot = true
 			rf.applyCond.Signal()
 			return
@@ -379,18 +370,11 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.log = rf.log[:1]
 
 	// 5.Reset state machine using snapshot contents
-	DPrintf("ID: %d Reset state machine to 1 size and return back\n", rf.me)
 	rf.commitIndex = args.LastIncludedIndex
 	rf.lastApplied = args.LastIncludedIndex
 	rf.persist()
 	rf.isNeedApplyingSnapshot = true
 	rf.applyCond.Signal()
-	//go rf.applySnapshot(&newSnapshot)
-}
-
-func (rf *Raft) applySnapshot(msg *ApplyMsg) {
-	DPrintf("ID: %d ApplySnapshot Index: %d to state machine\n", rf.me, msg.SnapshotIndex)
-	rf.applyCh <- *msg
 }
 
 func (rf *Raft) GoSendInstallSnapshot(peer int) {
@@ -426,9 +410,6 @@ func (rf *Raft) GoSendInstallSnapshot(peer int) {
 
 }
 
-// 注意一下参数属性都要大写
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (3A, 3B).
 	Term         int
@@ -437,8 +418,6 @@ type RequestVoteArgs struct {
 	LastLogTerm  int
 }
 
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (3A).
 	Term        int
@@ -579,7 +558,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	for i := args.PrevLogIndex + 1; i <= rf.getLastLogIndex() && newEntriesPos < len(args.Entries); i, newEntriesPos = i+1, newEntriesPos+1 {
 		if rf.log[i-offset].ApplyMsg.Term != args.Entries[newEntriesPos].ApplyMsg.Term {
 			rf.log = rf.log[:i-offset]
-			rf.persist()
+			//rf.persist()
 			break
 		}
 	}
@@ -587,7 +566,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if len(args.Entries) > 0 {
 		//DPrintf("%d will Add Entries: %v\n", rf.me, args.Entries[newEntriesPos:])
 		rf.log = append(rf.log, args.Entries[newEntriesPos:]...)
-		rf.persist()
+		//rf.persist()
 	}
 	// 5.If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	rf.commitIndex = Min(args.LeaderCommit, rf.getLastLogIndex())
@@ -598,11 +577,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 }
 
 func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntriesArgs) {
-	//DPrintf("%d in Term %d go Send to %d\n", rf.me, rf.currentTerm, idx)
 	reply := AppendEntriesReply{}
 	if rf.peers[server].Call("Raft.AppendEntries", args, &reply) {
 		rf.mu.Lock()
-		//DPrintf("Receive %v From %v\n", reply.Success, server)
 		if reply.Success {
 			//这里不能直接调用最末端的LogIndex
 			//试想直接使用最末端的LogIndex, 在发送心跳rpc中途，突然有客户端操作进入，获得的最末端的LogIndex是包括新加入的请求的
@@ -667,7 +644,6 @@ func (rf *Raft) BroadCastAppendEntries() {
 		offset := rf.getLogOffset()
 		nextIndex := rf.nextIndex[peer]
 		logEntries := make([]Log, 0)
-		//DPrintf("nextIndex: %d, lastLogIndex: %d, offset: %d\n", nextIndex, rf.getLastLogIndex(), offset)
 		if nextIndex <= offset {
 			// 这里如果nextIndex还很小，而lastIndex和offset已经拉高了，
 			// 说明nextIndex已经在快照中了，需要InstallSnapshotRPC来协助了
@@ -750,8 +726,6 @@ func (rf *Raft) LeaderRefreshCommitIndex() {
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
-	LockLog("%d Start GetLock\n", rf.me)
-	defer LockLog("%d Start UnLock\n", rf.me)
 	defer func() {
 		rf.mu.Unlock()
 		rf.ResetHeartTimer(0)
@@ -808,7 +782,7 @@ func (rf *Raft) ticker() {
 			rf.persist()
 			rf.mu.Unlock()
 			rf.ClearDelayTime()
-			//DPrintf("%d 开始竞选 Term: %d\n", rf.me, rf.currentTerm)
+			Debug(dVote, "%d 开始竞选 Term: %d\n", rf.me, rf.currentTerm)
 
 			var voteCnt int
 			voteCh := make(chan bool)
@@ -817,7 +791,7 @@ func (rf *Raft) ticker() {
 					if vote {
 						voteCnt++
 						if voteCnt > len(rf.peers)/2 && rf.GetStateType() == Candidate {
-							//DPrintf("%d Be Leader, Term: %d\n", rf.me, rf.currentTerm)
+							Debug(dVote, "%d Be Leader, Term: %d\n", rf.me, rf.currentTerm)
 							rf.SetStateType(Leader)
 							rf.mu.Lock()
 							rf.votedFor = -1
@@ -905,7 +879,7 @@ func (rf *Raft) applier() {
 		offset, commitIndex, lastApplied := rf.getLogOffset(), rf.commitIndex, rf.lastApplied
 		entries := make([]Log, commitIndex-lastApplied)
 		if commitIndex-offset+1 > len(rf.log) || lastApplied-offset+1 >= len(rf.log) {
-			DPrintf("%d LstApplied: %d, commitIndex: %d, offset: %d, lenLog: %d\n",
+			Debug(dLog, "%d LstApplied: %d, commitIndex: %d, offset: %d, lenLog: %d\n",
 				rf.me, lastApplied, commitIndex, offset, len(rf.log))
 		}
 		copy(entries, rf.log[Max(1, lastApplied-offset+1):Max(1, commitIndex-offset+1)])
@@ -914,10 +888,9 @@ func (rf *Raft) applier() {
 		// apply 到状态机中
 		for _, entry := range entries {
 			rf.applyCh <- entry.ApplyMsg
-			DPrintf("%d Apply index: %d to State Machine\n", rf.me, entry.ApplyMsg.CommandIndex)
+			Debug(dLog, "%d Apply index: %d to State Machine\n", rf.me, entry.ApplyMsg.CommandIndex)
 		}
 		rf.mu.Lock()
-		//DPrintf("持有锁")
 		rf.lastApplied = Max(rf.lastApplied, commitIndex)
 		rf.mu.Unlock()
 	}
@@ -957,17 +930,4 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 	go rf.ticker()
 	go rf.applier()
 	return rf
-}
-
-func Min(x, y int) int {
-	if x >= y {
-		return y
-	}
-	return x
-}
-func Max(x, y int) int {
-	if x >= y {
-		return x
-	}
-	return y
 }
