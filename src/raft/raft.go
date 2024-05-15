@@ -58,10 +58,6 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
-type Log struct {
-	ApplyMsg ApplyMsg
-}
-
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -76,7 +72,7 @@ type Raft struct {
 	applyCond   *sync.Cond
 	currentTerm int
 	votedFor    int
-	log         []Log // len(log)代表的是下一个进入log的index，此时获得的这个值上的log是空的
+	log         []ApplyMsg // len(log)代表的是下一个进入log的index，此时获得的这个值上的log是空的
 
 	commitIndex int
 	lastApplied int
@@ -137,11 +133,11 @@ func (rf *Raft) AddDelayTime(t int64) {
 // 而且这样索引到的速度是O(1)
 func (rf *Raft) getLogOffset() int {
 	if len(rf.log) > 0 {
-		if rf.log[0].ApplyMsg.CommandValid {
-			return rf.log[0].ApplyMsg.CommandIndex
+		if rf.log[0].CommandValid {
+			return rf.log[0].CommandIndex
 		}
-		if rf.log[0].ApplyMsg.SnapshotValid {
-			return rf.log[0].ApplyMsg.SnapshotIndex
+		if rf.log[0].SnapshotValid {
+			return rf.log[0].SnapshotIndex
 		}
 	}
 	log.Fatalf("%d getLogOffset error\n", rf.me)
@@ -150,11 +146,11 @@ func (rf *Raft) getLogOffset() int {
 
 func (rf *Raft) getLastLogIndex() int {
 	logEntry := rf.log[len(rf.log)-1]
-	if logEntry.ApplyMsg.CommandValid {
-		return logEntry.ApplyMsg.CommandIndex
+	if logEntry.CommandValid {
+		return logEntry.CommandIndex
 	}
-	if logEntry.ApplyMsg.SnapshotValid {
-		return logEntry.ApplyMsg.SnapshotIndex
+	if logEntry.SnapshotValid {
+		return logEntry.SnapshotIndex
 	}
 	log.Fatalf("%d getLastLogIndex error\n", rf.me)
 	return -10086
@@ -162,11 +158,11 @@ func (rf *Raft) getLastLogIndex() int {
 
 func (rf *Raft) getLastLogTerm() int {
 	logEntry := rf.log[len(rf.log)-1]
-	if logEntry.ApplyMsg.CommandValid {
-		return logEntry.ApplyMsg.Term
+	if logEntry.CommandValid {
+		return logEntry.Term
 	}
-	if logEntry.ApplyMsg.SnapshotValid {
-		return logEntry.ApplyMsg.SnapshotTerm
+	if logEntry.SnapshotValid {
+		return logEntry.SnapshotTerm
 	}
 	log.Fatalf("%d getLastLogTerm error\n", rf.me)
 	return -10086
@@ -179,12 +175,12 @@ func (rf *Raft) getLogTerm(logIndex int) int {
 		return -1
 	}
 	if logIndex-offset > 0 {
-		return rf.log[logIndex-offset].ApplyMsg.Term
+		return rf.log[logIndex-offset].Term
 	} else if logIndex-offset == 0 {
-		if rf.log[0].ApplyMsg.SnapshotValid {
-			return rf.log[0].ApplyMsg.SnapshotTerm
+		if rf.log[0].SnapshotValid {
+			return rf.log[0].SnapshotTerm
 		}
-		return rf.log[0].ApplyMsg.Term
+		return rf.log[0].Term
 	}
 	return -1
 }
@@ -218,11 +214,11 @@ func (rf *Raft) persist() {
 	e.Encode(rf.votedFor)
 	saveLog := rf.log[1:]
 	e.Encode(saveLog)
-	e.Encode(rf.log[0].ApplyMsg.SnapshotTerm)
-	e.Encode(rf.log[0].ApplyMsg.SnapshotIndex)
+	e.Encode(rf.log[0].SnapshotTerm)
+	e.Encode(rf.log[0].SnapshotIndex)
 	raftState := w.Bytes()
 
-	rf.Persister.Save(raftState, rf.log[0].ApplyMsg.Snapshot)
+	rf.Persister.Save(raftState, rf.log[0].Snapshot)
 }
 
 // restore previously persisted state.
@@ -235,7 +231,7 @@ func (rf *Raft) readPersist(data []byte) {
 	d := labgob.NewDecoder(r)
 	var curTerm int
 	var voteFor int
-	var logEntries []Log
+	var logEntries []ApplyMsg
 	var SnapshotTerm int
 	var SnapshotIndex int
 	if d.Decode(&curTerm) != nil || d.Decode(&voteFor) != nil || d.Decode(&logEntries) != nil ||
@@ -246,12 +242,12 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.votedFor = voteFor
 		rf.log = append(rf.log, logEntries...)
 		if SnapshotIndex != 0 {
-			rf.log[0].ApplyMsg.CommandValid = false
-			rf.log[0].ApplyMsg.SnapshotValid = true
-			rf.log[0].ApplyMsg.SnapshotIndex = SnapshotIndex
-			rf.log[0].ApplyMsg.SnapshotTerm = SnapshotTerm
+			rf.log[0].CommandValid = false
+			rf.log[0].SnapshotValid = true
+			rf.log[0].SnapshotIndex = SnapshotIndex
+			rf.log[0].SnapshotTerm = SnapshotTerm
 			// 这里重开时要把快照拉回来，否则下次再存的时候，这里是空的直接把快照弄没了。Bug From 3D最后一个TestSnapshotInit3D
-			rf.log[0].ApplyMsg.Snapshot = rf.Persister.ReadSnapshot()
+			rf.log[0].Snapshot = rf.Persister.ReadSnapshot()
 			rf.lastApplied = SnapshotIndex
 			rf.commitIndex = SnapshotIndex
 		}
@@ -270,18 +266,17 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	if index-offset <= 0 || index-offset >= len(rf.log) {
 		return
 	}
-	term := rf.log[index-offset].ApplyMsg.Term
-	newLog := make([]Log, 1)
-	newLog[0] = Log{
-		ApplyMsg: ApplyMsg{
-			SnapshotValid: true,
-			SnapshotIndex: index,
-			SnapshotTerm:  term,
-			Snapshot:      snapshot,
-		}}
+	term := rf.log[index-offset].Term
+	newLog := make([]ApplyMsg, 1)
+	newLog[0] = ApplyMsg{
+		SnapshotValid: true,
+		SnapshotIndex: index,
+		SnapshotTerm:  term,
+		Snapshot:      snapshot,
+	}
 	idx := 1
 	for idx < len(rf.log) {
-		applyMsg := rf.log[idx].ApplyMsg
+		applyMsg := rf.log[idx]
 		if applyMsg.CommandValid && applyMsg.CommandIndex <= index {
 			idx++
 		} else if applyMsg.SnapshotValid && applyMsg.SnapshotIndex <= index {
@@ -325,7 +320,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.votedFor = -1
 	}
 	rf.currentTerm = args.Term
-	rf.ClearDelayTime() // 清空delayTime
 	rf.persist()
 
 	// 过时的Snapshot不要了， 如果这里要了可能会导致超界
@@ -338,21 +332,18 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotTerm:  args.LastIncludedTerm,
 		Snapshot:      args.Data,
 	}
-	newApplyMsg := Log{
-		ApplyMsg: newSnapshot,
-	}
+	newApplyMsg := newSnapshot
 
 	// 2. Save snapshot file, discard any existing or partial snapshot with a smaller index
-	if rf.log[0].ApplyMsg.CommandValid ||
-		(rf.log[0].ApplyMsg.SnapshotValid && rf.log[0].ApplyMsg.SnapshotIndex < args.LastIncludedIndex) {
+	if rf.log[0].CommandValid ||
+		(rf.log[0].SnapshotValid && rf.log[0].SnapshotIndex < args.LastIncludedIndex) {
 		rf.log[0] = newApplyMsg
-		//rf.persist()
 	}
 	// 3. If existing log entry has same index and term as snapshot’s last included entry,
 	// retain log entries following it and reply
 	for i := 1; i < len(rf.log); i++ {
 		log := rf.log[i]
-		if log.ApplyMsg.CommandIndex == args.LastIncludedIndex && log.ApplyMsg.Term == args.LastIncludedTerm {
+		if log.CommandIndex == args.LastIncludedIndex && log.Term == args.LastIncludedTerm {
 			rf.lastApplied = args.LastIncludedIndex
 			rf.commitIndex = args.LastIncludedIndex
 
@@ -385,12 +376,12 @@ func (rf *Raft) GoSendInstallSnapshot(peer int) {
 	args := InstallSnapshotArgs{
 		Term:              rf.currentTerm,
 		LeaderId:          rf.me,
-		LastIncludedIndex: rf.log[0].ApplyMsg.SnapshotIndex,
-		LastIncludedTerm:  rf.log[0].ApplyMsg.SnapshotTerm,
+		LastIncludedIndex: rf.log[0].SnapshotIndex,
+		LastIncludedTerm:  rf.log[0].SnapshotTerm,
 		Data:              rf.Persister.ReadSnapshot(),
 	}
 	//todo 感觉是这里发出去的有问题
-	applySnapshotIndex := rf.log[0].ApplyMsg.SnapshotIndex
+	applySnapshotIndex := rf.log[0].SnapshotIndex
 	//DPrintf("%d GoSendInstallSnapshot: to %d\n", rf.me, peer)
 	rf.mu.Unlock()
 	reply := InstallSnapshotReply{}
@@ -502,7 +493,7 @@ type AppendEntriesArgs struct {
 	LeaderId     int
 	PrevLogIndex int
 	PrevLogTerm  int
-	Entries      []Log
+	Entries      []ApplyMsg
 	LeaderCommit int
 }
 
@@ -543,7 +534,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else {
 			reply.ConflictTerm = logTerm
 			index := args.PrevLogIndex - 1
-			for index-offset >= 0 && rf.log[index-offset].ApplyMsg.Term == reply.ConflictTerm {
+			for index-offset >= 0 && rf.log[index-offset].Term == reply.ConflictTerm {
 				index--
 			}
 			reply.ConflictIndex = index
@@ -556,9 +547,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// delete the existing entry and all that follow it
 	newEntriesPos := 0
 	for i := args.PrevLogIndex + 1; i <= rf.getLastLogIndex() && newEntriesPos < len(args.Entries); i, newEntriesPos = i+1, newEntriesPos+1 {
-		if rf.log[i-offset].ApplyMsg.Term != args.Entries[newEntriesPos].ApplyMsg.Term {
+		if rf.log[i-offset].Term != args.Entries[newEntriesPos].Term {
 			rf.log = rf.log[:i-offset]
-			//rf.persist()
 			break
 		}
 	}
@@ -603,8 +593,8 @@ func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntrie
 					//len(rf.log), rf.log[0].ApplyMsg.SnapshotTerm, rf.log[0].ApplyMsg.SnapshotIndex)
 					for i := len(rf.log) - 1; i >= 1; i-- {
 						//DPrintf("log[%d].Term == %d\n", i, rf.log[i].Term)
-						if rf.log[i].ApplyMsg.Term == conflictTerm {
-							rf.nextIndex[server] = rf.log[i].ApplyMsg.CommandIndex
+						if rf.log[i].Term == conflictTerm {
+							rf.nextIndex[server] = rf.log[i].CommandIndex
 							break
 						}
 					}
@@ -643,7 +633,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		rf.mu.Lock()
 		offset := rf.getLogOffset()
 		nextIndex := rf.nextIndex[peer]
-		logEntries := make([]Log, 0)
+		logEntries := make([]ApplyMsg, 0)
 		if nextIndex <= offset {
 			// 这里如果nextIndex还很小，而lastIndex和offset已经拉高了，
 			// 说明nextIndex已经在快照中了，需要InstallSnapshotRPC来协助了
@@ -660,10 +650,10 @@ func (rf *Raft) BroadCastAppendEntries() {
 			log.Printf("id: %d, logIndex: %d offset: %d, lenLog: %d\n", rf.me, nextIndex-1, offset, len(rf.log))
 		}
 		prevLog := rf.log[nextIndex-1-offset]
-		if prevLog.ApplyMsg.CommandValid {
-			prevLogTerm = rf.log[nextIndex-1-offset].ApplyMsg.Term
-		} else if prevLog.ApplyMsg.SnapshotValid {
-			prevLogTerm = rf.log[nextIndex-1-offset].ApplyMsg.SnapshotTerm
+		if prevLog.CommandValid {
+			prevLogTerm = rf.log[nextIndex-1-offset].Term
+		} else if prevLog.SnapshotValid {
+			prevLogTerm = rf.log[nextIndex-1-offset].SnapshotTerm
 		} else {
 			log.Fatalf("%d Find Error\n", rf.me)
 		}
@@ -704,7 +694,7 @@ func (rf *Raft) LeaderRefreshCommitIndex() {
 	}
 	newCommitIndex--
 	if newCommitIndex-offset <= 0 || newCommitIndex-offset >= len(rf.log) ||
-		rf.log[newCommitIndex-offset].ApplyMsg.Term != rf.currentTerm {
+		rf.log[newCommitIndex-offset].Term != rf.currentTerm {
 		// 如果要提交的log还是在老任期的，是不予提交的
 		// 只有节点在当前任期内，才予以提交（并会把老节点一起提交），详情5.4.2
 		return
@@ -736,17 +726,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := rf.currentTerm
 	//DPrintf("command %v to %d Term: %v\n", command, rf.me, rf.currentTerm)
 	// Your code here (3B).
-	newLog := Log{
-		ApplyMsg: ApplyMsg{
-			CommandValid: true,
-			Command:      command,
-			CommandIndex: rf.getLastLogIndex() + 1,
-			Term:         term,
-		},
+	newLog := ApplyMsg{
+		CommandValid: true,
+		Command:      command,
+		CommandIndex: rf.getLastLogIndex() + 1,
+		Term:         term,
 	}
 	rf.log = append(rf.log, newLog)
 	rf.persist()
-	return newLog.ApplyMsg.CommandIndex, term, true
+	return newLog.CommandIndex, term, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -824,6 +812,7 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 				go func(idx int) {
 					reply := RequestVoteReply{}
+					Debug(dVote, "%d Send RequestVote to %d, args: %v\n", rf.me, idx, args)
 					if rf.sendRequestVote(idx, &args, &reply) {
 						voteChMu.Lock()
 						if reply.VoteGranted && !closed {
@@ -856,8 +845,6 @@ func (rf *Raft) ticker() {
 			// 如果是Candidate，超时说明这次选举没结果，开启选举
 			// 所以两个状态都需要计算超时
 			rf.AddDelayTime(ms)
-		} else {
-			rf.ClearDelayTime()
 		}
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
@@ -871,13 +858,13 @@ func (rf *Raft) applier() {
 		}
 		if rf.isNeedApplyingSnapshot {
 			rf.isNeedApplyingSnapshot = false
-			snapshot := rf.log[0].ApplyMsg
+			snapshot := rf.log[0]
 			rf.mu.Unlock()
 			rf.applyCh <- snapshot
 			continue
 		}
 		offset, commitIndex, lastApplied := rf.getLogOffset(), rf.commitIndex, rf.lastApplied
-		entries := make([]Log, commitIndex-lastApplied)
+		entries := make([]ApplyMsg, commitIndex-lastApplied)
 		if commitIndex-offset+1 > len(rf.log) || lastApplied-offset+1 >= len(rf.log) {
 			Debug(dLog, "%d LstApplied: %d, commitIndex: %d, offset: %d, lenLog: %d\n",
 				rf.me, lastApplied, commitIndex, offset, len(rf.log))
@@ -887,8 +874,8 @@ func (rf *Raft) applier() {
 		rf.mu.Unlock()
 		// apply 到状态机中
 		for _, entry := range entries {
-			rf.applyCh <- entry.ApplyMsg
-			Debug(dLog, "%d Apply index: %d to State Machine\n", rf.me, entry.ApplyMsg.CommandIndex)
+			rf.applyCh <- entry
+			Debug(dLog, "%d Apply index: %d to State Machine\n", rf.me, entry.CommandIndex)
 		}
 		rf.mu.Lock()
 		rf.lastApplied = Max(rf.lastApplied, commitIndex)
@@ -913,20 +900,17 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		votedFor:    -1,
 		lastApplied: 0,
 		state:       Follower,
-		log:         make([]Log, 1),
+		log:         make([]ApplyMsg, 1),
 		nextIndex:   make([]int, len(peers)),
 		matchIndex:  make([]int, len(peers)),
 		applyCh:     applyCh,
 		heartTimer:  time.NewTimer(0),
 	}
 	rf.applyCond = sync.NewCond(&rf.mu)
-	rf.log[0].ApplyMsg.CommandValid = true
-	// Your initialization code here (3A, 3B, 3C).
+	rf.log[0].CommandValid = true
 
-	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	// start ticker goroutine to start elections
 	go rf.ticker()
 	go rf.applier()
 	return rf

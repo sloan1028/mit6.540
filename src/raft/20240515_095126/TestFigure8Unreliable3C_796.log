@@ -1,0 +1,493 @@
+Test (3C): Figure 8 (unreliable) ...
+006847 VOTE 4 开始竞选 Term: 1
+006848 VOTE 4 Send RequestVote to 3, args: {1 4 0 0}
+006848 VOTE 4 Send RequestVote to 0, args: {1 4 0 0}
+006848 VOTE 4 Send RequestVote to 1, args: {1 4 0 0}
+006848 VOTE 4 Send RequestVote to 2, args: {1 4 0 0}
+006915 VOTE 4 Be Leader, Term: 1
+007589 LOG1 4 Apply index: 1 to State Machine
+007631 LOG1 2 Apply index: 1 to State Machine
+007634 LOG1 3 Apply index: 1 to State Machine
+007659 LOG1 4 Apply index: 2 to State Machine
+007659 LOG1 1 Apply index: 1 to State Machine
+007714 LOG1 0 Apply index: 1 to State Machine
+007716 LOG1 4 Apply index: 3 to State Machine
+007729 LOG1 1 Apply index: 2 to State Machine
+007743 LOG1 4 Apply index: 4 to State Machine
+007743 LOG1 2 Apply index: 2 to State Machine
+007757 LOG1 3 Apply index: 2 to State Machine
+007792 LOG1 0 Apply index: 2 to State Machine
+015855 VOTE 3 开始竞选 Term: 2
+015856 VOTE 3 Send RequestVote to 4, args: {2 3 4 1}
+015856 VOTE 3 Send RequestVote to 0, args: {2 3 4 1}
+015856 VOTE 3 Send RequestVote to 1, args: {2 3 4 1}
+015858 VOTE 3 Send RequestVote to 2, args: {2 3 4 1}
+016077 VOTE 3 Be Leader, Term: 2
+025030 VOTE 1 开始竞选 Term: 3
+025038 VOTE 1 Send RequestVote to 4, args: {3 1 5 2}
+025039 VOTE 1 Send RequestVote to 0, args: {3 1 5 2}
+025039 VOTE 1 Send RequestVote to 2, args: {3 1 5 2}
+025040 VOTE 1 Send RequestVote to 3, args: {3 1 5 2}
+031656 VOTE 1 开始竞选 Term: 4
+031656 VOTE 1 Send RequestVote to 4, args: {4 1 5 2}
+031657 VOTE 1 Send RequestVote to 3, args: {4 1 5 2}
+031657 VOTE 1 Send RequestVote to 0, args: {4 1 5 2}
+031657 VOTE 1 Send RequestVote to 2, args: {4 1 5 2}
+031903 VOTE 1 Be Leader, Term: 4
+033636 LOG1 1 Apply index: 3 to State Machine
+033637 LOG1 1 Apply index: 4 to State Machine
+033637 LOG1 1 Apply index: 5 to State Machine
+033637 LOG1 1 Apply index: 6 to State Machine
+041015 VOTE 3 开始竞选 Term: 5
+041015 VOTE 3 Send RequestVote to 4, args: {5 3 30 2}
+041016 VOTE 3 Send RequestVote to 0, args: {5 3 30 2}
+041016 VOTE 3 Send RequestVote to 1, args: {5 3 30 2}
+041016 VOTE 3 Send RequestVote to 2, args: {5 3 30 2}
+041117 VOTE 0 开始竞选 Term: 5
+041118 VOTE 0 Send RequestVote to 4, args: {5 0 7 4}
+041118 VOTE 0 Send RequestVote to 1, args: {5 0 7 4}
+041118 VOTE 0 Send RequestVote to 2, args: {5 0 7 4}
+041118 VOTE 0 Send RequestVote to 3, args: {5 0 7 4}
+041313 VOTE 0 Be Leader, Term: 5
+041670 LOG1 0 Apply index: 3 to State Machine
+041670 LOG1 0 Apply index: 4 to State Machine
+041670 LOG1 0 Apply index: 5 to State Machine
+041670 LOG1 0 Apply index: 6 to State Machine
+041670 LOG1 0 Apply index: 7 to State Machine
+041670 LOG1 0 Apply index: 8 to State Machine
+041672 LOG1 0 Apply index: 9 to State Machine
+041672 LOG1 0 Apply index: 10 to State Machine
+041673 LOG1 0 Apply index: 11 to State Machine
+041826 LOG1 0 Apply index: 12 to State Machine
+041917 LOG1 4 Apply index: 5 to State Machine
+041918 LOG1 4 Apply index: 6 to State Machine
+041918 LOG1 4 Apply index: 7 to State Machine
+041918 LOG1 4 Apply index: 8 to State Machine
+041918 LOG1 4 Apply index: 9 to State Machine
+041918 LOG1 4 Apply index: 10 to State Machine
+041918 LOG1 4 Apply index: 11 to State Machine
+042095 LOG1 2 Apply index: 3 to State Machine
+042095 LOG1 2 Apply index: 4 to State Machine
+042095 LOG1 2 Apply index: 5 to State Machine
+042095 LOG1 2 Apply index: 6 to State Machine
+042095 LOG1 2 Apply index: 7 to State Machine
+042095 LOG1 2 Apply index: 8 to State Machine
+042095 LOG1 2 Apply index: 9 to State Machine
+042095 LOG1 2 Apply index: 10 to State Machine
+042095 LOG1 2 Apply index: 11 to State Machine
+042119 LOG1 4 Apply index: 12 to State Machine
+042174 LOG1 0 Apply index: 13 to State Machine
+042175 LOG1 0 Apply index: 14 to State Machine
+042175 LOG1 0 Apply index: 15 to State Machine
+042175 LOG1 0 Apply index: 16 to State Machine
+042177 LOG1 2 Apply index: 12 to State Machine
+045526 VOTE 1 开始竞选 Term: 6
+045529 VOTE 1 Send RequestVote to 4, args: {6 1 48 4}
+045529 VOTE 1 Send RequestVote to 0, args: {6 1 48 4}
+045529 VOTE 1 Send RequestVote to 2, args: {6 1 48 4}
+045529 VOTE 1 Send RequestVote to 3, args: {6 1 48 4}
+046260 LOG1 2 Apply index: 13 to State Machine
+046264 LOG1 2 Apply index: 14 to State Machine
+046264 LOG1 2 Apply index: 15 to State Machine
+046264 LOG1 2 Apply index: 16 to State Machine
+046262 LOG1 0 Apply index: 17 to State Machine
+046264 LOG1 0 Apply index: 18 to State Machine
+046264 LOG1 0 Apply index: 19 to State Machine
+046264 LOG1 0 Apply index: 20 to State Machine
+046264 LOG1 0 Apply index: 21 to State Machine
+046263 LOG1 4 Apply index: 13 to State Machine
+046264 LOG1 4 Apply index: 14 to State Machine
+046264 LOG1 4 Apply index: 15 to State Machine
+046264 LOG1 4 Apply index: 16 to State Machine
+046572 LOG1 2 Apply index: 17 to State Machine
+046572 LOG1 2 Apply index: 18 to State Machine
+046572 LOG1 2 Apply index: 19 to State Machine
+046572 LOG1 2 Apply index: 20 to State Machine
+046572 LOG1 2 Apply index: 21 to State Machine
+046572 LOG1 4 Apply index: 17 to State Machine
+046572 LOG1 4 Apply index: 18 to State Machine
+046572 LOG1 4 Apply index: 19 to State Machine
+046572 LOG1 4 Apply index: 20 to State Machine
+046572 LOG1 4 Apply index: 21 to State Machine
+046727 LOG1 0 Apply index: 22 to State Machine
+046728 LOG1 0 Apply index: 23 to State Machine
+046728 LOG1 0 Apply index: 24 to State Machine
+047205 LOG1 4 Apply index: 22 to State Machine
+047206 LOG1 4 Apply index: 23 to State Machine
+047206 LOG1 4 Apply index: 24 to State Machine
+047361 LOG1 2 Apply index: 22 to State Machine
+047361 LOG1 2 Apply index: 23 to State Machine
+047361 LOG1 2 Apply index: 24 to State Machine
+048616 VOTE 3 开始竞选 Term: 6
+048616 VOTE 3 Send RequestVote to 4, args: {6 3 30 2}
+048617 VOTE 3 Send RequestVote to 0, args: {6 3 30 2}
+048617 VOTE 3 Send RequestVote to 1, args: {6 3 30 2}
+048617 VOTE 3 Send RequestVote to 2, args: {6 3 30 2}
+053400 VOTE 1 开始竞选 Term: 7
+053401 VOTE 1 Send RequestVote to 4, args: {7 1 48 4}
+053401 VOTE 1 Send RequestVote to 0, args: {7 1 48 4}
+053401 VOTE 1 Send RequestVote to 2, args: {7 1 48 4}
+053401 VOTE 1 Send RequestVote to 3, args: {7 1 48 4}
+054240 VOTE 4 开始竞选 Term: 6
+054240 VOTE 4 Send RequestVote to 3, args: {6 4 27 5}
+054241 VOTE 4 Send RequestVote to 0, args: {6 4 27 5}
+054241 VOTE 4 Send RequestVote to 1, args: {6 4 27 5}
+054241 VOTE 4 Send RequestVote to 2, args: {6 4 27 5}
+056697 VOTE 3 开始竞选 Term: 7
+056701 VOTE 3 Send RequestVote to 4, args: {7 3 30 2}
+056703 VOTE 3 Send RequestVote to 1, args: {7 3 30 2}
+056703 VOTE 3 Send RequestVote to 0, args: {7 3 30 2}
+056703 VOTE 3 Send RequestVote to 2, args: {7 3 30 2}
+061356 VOTE 1 开始竞选 Term: 8
+061357 VOTE 1 Send RequestVote to 4, args: {8 1 48 4}
+061357 VOTE 1 Send RequestVote to 2, args: {8 1 48 4}
+061357 VOTE 1 Send RequestVote to 3, args: {8 1 48 4}
+061357 VOTE 1 Send RequestVote to 0, args: {8 1 48 4}
+062464 VOTE 4 开始竞选 Term: 8
+062464 VOTE 4 Send RequestVote to 3, args: {8 4 27 5}
+062465 VOTE 4 Send RequestVote to 0, args: {8 4 27 5}
+062465 VOTE 4 Send RequestVote to 1, args: {8 4 27 5}
+062465 VOTE 4 Send RequestVote to 2, args: {8 4 27 5}
+062931 VOTE 2 开始竞选 Term: 8
+062932 VOTE 2 Send RequestVote to 4, args: {8 2 27 5}
+062933 VOTE 2 Send RequestVote to 0, args: {8 2 27 5}
+062934 VOTE 2 Send RequestVote to 1, args: {8 2 27 5}
+062934 VOTE 2 Send RequestVote to 3, args: {8 2 27 5}
+068704 VOTE 2 开始竞选 Term: 9
+068708 VOTE 2 Send RequestVote to 4, args: {9 2 27 5}
+068708 VOTE 2 Send RequestVote to 0, args: {9 2 27 5}
+068708 VOTE 2 Send RequestVote to 1, args: {9 2 27 5}
+068708 VOTE 2 Send RequestVote to 3, args: {9 2 27 5}
+070247 VOTE 1 开始竞选 Term: 9
+070248 VOTE 1 Send RequestVote to 4, args: {9 1 48 4}
+070249 VOTE 1 Send RequestVote to 0, args: {9 1 48 4}
+070249 VOTE 1 Send RequestVote to 2, args: {9 1 48 4}
+070249 VOTE 1 Send RequestVote to 3, args: {9 1 48 4}
+076385 VOTE 2 开始竞选 Term: 10
+076385 VOTE 2 Send RequestVote to 4, args: {10 2 27 5}
+076386 VOTE 2 Send RequestVote to 0, args: {10 2 27 5}
+076386 VOTE 2 Send RequestVote to 1, args: {10 2 27 5}
+076386 VOTE 2 Send RequestVote to 3, args: {10 2 27 5}
+077256 VOTE 1 开始竞选 Term: 10
+077256 VOTE 1 Send RequestVote to 4, args: {10 1 48 4}
+077257 VOTE 1 Send RequestVote to 0, args: {10 1 48 4}
+077257 VOTE 1 Send RequestVote to 2, args: {10 1 48 4}
+077257 VOTE 1 Send RequestVote to 3, args: {10 1 48 4}
+078162 VOTE 3 开始竞选 Term: 10
+078163 VOTE 3 Send RequestVote to 4, args: {10 3 30 2}
+078163 VOTE 3 Send RequestVote to 0, args: {10 3 30 2}
+078163 VOTE 3 Send RequestVote to 1, args: {10 3 30 2}
+078163 VOTE 3 Send RequestVote to 2, args: {10 3 30 2}
+083007 VOTE 2 开始竞选 Term: 11
+083008 VOTE 2 Send RequestVote to 4, args: {11 2 27 5}
+083008 VOTE 2 Send RequestVote to 0, args: {11 2 27 5}
+083008 VOTE 2 Send RequestVote to 1, args: {11 2 27 5}
+083008 VOTE 2 Send RequestVote to 3, args: {11 2 27 5}
+084084 VOTE 1 开始竞选 Term: 11
+084084 VOTE 1 Send RequestVote to 4, args: {11 1 48 4}
+084084 VOTE 1 Send RequestVote to 3, args: {11 1 48 4}
+084084 VOTE 1 Send RequestVote to 2, args: {11 1 48 4}
+084084 VOTE 1 Send RequestVote to 0, args: {11 1 48 4}
+088214 VOTE 2 Be Leader, Term: 11
+089575 VOTE 4 开始竞选 Term: 12
+089579 VOTE 4 Send RequestVote to 3, args: {12 4 27 5}
+089580 VOTE 4 Send RequestVote to 0, args: {12 4 27 5}
+089580 VOTE 4 Send RequestVote to 1, args: {12 4 27 5}
+089580 VOTE 4 Send RequestVote to 2, args: {12 4 27 5}
+092917 VOTE 1 开始竞选 Term: 12
+093021 VOTE 1 Send RequestVote to 4, args: {12 1 48 4}
+093021 VOTE 1 Send RequestVote to 2, args: {12 1 48 4}
+093021 VOTE 1 Send RequestVote to 0, args: {12 1 48 4}
+093021 VOTE 1 Send RequestVote to 3, args: {12 1 48 4}
+096624 VOTE 3 开始竞选 Term: 13
+096625 VOTE 3 Send RequestVote to 4, args: {13 3 30 2}
+096625 VOTE 3 Send RequestVote to 0, args: {13 3 30 2}
+096625 VOTE 3 Send RequestVote to 1, args: {13 3 30 2}
+096625 VOTE 3 Send RequestVote to 2, args: {13 3 30 2}
+097716 VOTE 2 开始竞选 Term: 14
+097717 VOTE 2 Send RequestVote to 4, args: {14 2 27 5}
+097720 VOTE 2 Send RequestVote to 0, args: {14 2 27 5}
+097720 VOTE 2 Send RequestVote to 1, args: {14 2 27 5}
+097720 VOTE 2 Send RequestVote to 3, args: {14 2 27 5}
+101197 VOTE 1 开始竞选 Term: 13
+101198 VOTE 1 Send RequestVote to 4, args: {13 1 48 4}
+101198 VOTE 1 Send RequestVote to 0, args: {13 1 48 4}
+101198 VOTE 1 Send RequestVote to 2, args: {13 1 48 4}
+101198 VOTE 1 Send RequestVote to 3, args: {13 1 48 4}
+101566 VOTE 2 Be Leader, Term: 14
+101818 LOG1 3 Apply index: 3 to State Machine
+101819 LOG1 3 Apply index: 4 to State Machine
+101819 LOG1 3 Apply index: 5 to State Machine
+101819 LOG1 3 Apply index: 6 to State Machine
+101819 LOG1 3 Apply index: 7 to State Machine
+101819 LOG1 3 Apply index: 8 to State Machine
+101819 LOG1 3 Apply index: 9 to State Machine
+101819 LOG1 3 Apply index: 10 to State Machine
+101819 LOG1 3 Apply index: 11 to State Machine
+101819 LOG1 3 Apply index: 12 to State Machine
+101819 LOG1 3 Apply index: 13 to State Machine
+101819 LOG1 3 Apply index: 14 to State Machine
+101819 LOG1 3 Apply index: 15 to State Machine
+101819 LOG1 3 Apply index: 16 to State Machine
+101819 LOG1 3 Apply index: 17 to State Machine
+101819 LOG1 3 Apply index: 18 to State Machine
+101819 LOG1 3 Apply index: 19 to State Machine
+101819 LOG1 3 Apply index: 20 to State Machine
+101819 LOG1 3 Apply index: 21 to State Machine
+101819 LOG1 3 Apply index: 22 to State Machine
+101819 LOG1 3 Apply index: 23 to State Machine
+101819 LOG1 3 Apply index: 24 to State Machine
+102098 LOG1 2 Apply index: 25 to State Machine
+102099 LOG1 2 Apply index: 26 to State Machine
+102099 LOG1 2 Apply index: 27 to State Machine
+102099 LOG1 2 Apply index: 28 to State Machine
+102099 LOG1 2 Apply index: 29 to State Machine
+102216 LOG1 2 Apply index: 30 to State Machine
+102219 LOG1 2 Apply index: 31 to State Machine
+102219 LOG1 2 Apply index: 32 to State Machine
+103341 LOG1 4 Apply index: 25 to State Machine
+103341 LOG1 4 Apply index: 26 to State Machine
+103341 LOG1 4 Apply index: 27 to State Machine
+103341 LOG1 4 Apply index: 28 to State Machine
+103341 LOG1 4 Apply index: 29 to State Machine
+103341 LOG1 4 Apply index: 30 to State Machine
+103341 LOG1 4 Apply index: 31 to State Machine
+103341 LOG1 4 Apply index: 32 to State Machine
+103341 LOG1 3 Apply index: 25 to State Machine
+103341 LOG1 3 Apply index: 26 to State Machine
+103341 LOG1 3 Apply index: 27 to State Machine
+103341 LOG1 3 Apply index: 28 to State Machine
+103341 LOG1 3 Apply index: 29 to State Machine
+103341 LOG1 3 Apply index: 30 to State Machine
+103342 LOG1 3 Apply index: 31 to State Machine
+103342 LOG1 3 Apply index: 32 to State Machine
+109208 VOTE 1 开始竞选 Term: 14
+109208 VOTE 1 Send RequestVote to 4, args: {14 1 48 4}
+109208 VOTE 1 Send RequestVote to 0, args: {14 1 48 4}
+109208 VOTE 1 Send RequestVote to 2, args: {14 1 48 4}
+109208 VOTE 1 Send RequestVote to 3, args: {14 1 48 4}
+112901 LOG1 2 Apply index: 33 to State Machine
+114844 VOTE 3 开始竞选 Term: 15
+114844 VOTE 3 Send RequestVote to 4, args: {15 3 35 14}
+114844 VOTE 3 Send RequestVote to 0, args: {15 3 35 14}
+114844 VOTE 3 Send RequestVote to 1, args: {15 3 35 14}
+114844 VOTE 3 Send RequestVote to 2, args: {15 3 35 14}
+121979 VOTE 3 开始竞选 Term: 16
+121979 VOTE 3 Send RequestVote to 4, args: {16 3 35 14}
+121980 VOTE 3 Send RequestVote to 0, args: {16 3 35 14}
+121980 VOTE 3 Send RequestVote to 1, args: {16 3 35 14}
+121981 VOTE 3 Send RequestVote to 2, args: {16 3 35 14}
+127038 VOTE 3 Be Leader, Term: 16
+128002 LOG1 1 Apply index: 7 to State Machine
+128002 LOG1 1 Apply index: 8 to State Machine
+128002 LOG1 1 Apply index: 9 to State Machine
+128002 LOG1 1 Apply index: 10 to State Machine
+128002 LOG1 1 Apply index: 11 to State Machine
+128002 LOG1 1 Apply index: 12 to State Machine
+128002 LOG1 1 Apply index: 13 to State Machine
+128002 LOG1 1 Apply index: 14 to State Machine
+128002 LOG1 1 Apply index: 15 to State Machine
+128002 LOG1 1 Apply index: 16 to State Machine
+128002 LOG1 1 Apply index: 17 to State Machine
+128002 LOG1 1 Apply index: 18 to State Machine
+128002 LOG1 1 Apply index: 19 to State Machine
+128002 LOG1 1 Apply index: 20 to State Machine
+128002 LOG1 1 Apply index: 21 to State Machine
+128002 LOG1 1 Apply index: 22 to State Machine
+128002 LOG1 1 Apply index: 23 to State Machine
+128002 LOG1 1 Apply index: 24 to State Machine
+128002 LOG1 1 Apply index: 25 to State Machine
+128002 LOG1 1 Apply index: 26 to State Machine
+128002 LOG1 1 Apply index: 27 to State Machine
+128003 LOG1 1 Apply index: 28 to State Machine
+128003 LOG1 1 Apply index: 29 to State Machine
+128003 LOG1 1 Apply index: 30 to State Machine
+128003 LOG1 1 Apply index: 31 to State Machine
+128003 LOG1 1 Apply index: 32 to State Machine
+130464 VOTE 2 开始竞选 Term: 17
+130464 VOTE 2 Send RequestVote to 4, args: {17 2 88 14}
+130464 VOTE 2 Send RequestVote to 0, args: {17 2 88 14}
+130464 VOTE 2 Send RequestVote to 1, args: {17 2 88 14}
+130464 VOTE 2 Send RequestVote to 3, args: {17 2 88 14}
+135622 VOTE 4 开始竞选 Term: 18
+135622 VOTE 4 Send RequestVote to 3, args: {18 4 36 16}
+135622 VOTE 4 Send RequestVote to 0, args: {18 4 36 16}
+135622 VOTE 4 Send RequestVote to 1, args: {18 4 36 16}
+135623 VOTE 4 Send RequestVote to 2, args: {18 4 36 16}
+135772 VOTE 3 开始竞选 Term: 18
+135773 VOTE 3 Send RequestVote to 4, args: {18 3 49 16}
+135773 VOTE 3 Send RequestVote to 0, args: {18 3 49 16}
+135773 VOTE 3 Send RequestVote to 1, args: {18 3 49 16}
+135773 VOTE 3 Send RequestVote to 2, args: {18 3 49 16}
+135778 VOTE 4 Be Leader, Term: 18
+135934 VOTE 3 Be Leader, Term: 18
+143624 VOTE 0 开始竞选 Term: 19
+143624 VOTE 0 Send RequestVote to 4, args: {19 0 335 5}
+143624 VOTE 0 Send RequestVote to 1, args: {19 0 335 5}
+143624 VOTE 0 Send RequestVote to 2, args: {19 0 335 5}
+143625 VOTE 0 Send RequestVote to 3, args: {19 0 335 5}
+146906 LOG1 4 Apply index: 33 to State Machine
+146907 LOG1 4 Apply index: 34 to State Machine
+146907 LOG1 4 Apply index: 35 to State Machine
+146907 LOG1 4 Apply index: 36 to State Machine
+146907 LOG1 4 Apply index: 37 to State Machine
+146907 LOG1 4 Apply index: 38 to State Machine
+146907 LOG1 4 Apply index: 39 to State Machine
+146907 LOG1 4 Apply index: 40 to State Machine
+146907 LOG1 4 Apply index: 41 to State Machine
+146907 LOG1 4 Apply index: 42 to State Machine
+146907 LOG1 4 Apply index: 43 to State Machine
+146907 LOG1 4 Apply index: 44 to State Machine
+146907 LOG1 4 Apply index: 45 to State Machine
+146907 LOG1 4 Apply index: 46 to State Machine
+146907 LOG1 4 Apply index: 47 to State Machine
+146907 LOG1 4 Apply index: 48 to State Machine
+146907 LOG1 4 Apply index: 49 to State Machine
+146907 LOG1 4 Apply index: 50 to State Machine
+148286 VOTE 1 开始竞选 Term: 20
+148286 VOTE 1 Send RequestVote to 4, args: {20 1 54 18}
+148287 VOTE 1 Send RequestVote to 0, args: {20 1 54 18}
+148287 VOTE 1 Send RequestVote to 2, args: {20 1 54 18}
+148287 VOTE 1 Send RequestVote to 3, args: {20 1 54 18}
+154670 VOTE 1 开始竞选 Term: 21
+154670 VOTE 1 Send RequestVote to 4, args: {21 1 54 18}
+154670 VOTE 1 Send RequestVote to 3, args: {21 1 54 18}
+154670 VOTE 1 Send RequestVote to 2, args: {21 1 54 18}
+154670 VOTE 1 Send RequestVote to 0, args: {21 1 54 18}
+156066 VOTE 1 Be Leader, Term: 21
+165516 VOTE 3 开始竞选 Term: 22
+165517 VOTE 3 Send RequestVote to 4, args: {22 3 117 18}
+165517 VOTE 3 Send RequestVote to 0, args: {22 3 117 18}
+165517 VOTE 3 Send RequestVote to 1, args: {22 3 117 18}
+165517 VOTE 3 Send RequestVote to 2, args: {22 3 117 18}
+167186 VOTE 2 开始竞选 Term: 22
+167187 VOTE 2 Send RequestVote to 4, args: {22 2 59 21}
+167187 VOTE 2 Send RequestVote to 0, args: {22 2 59 21}
+167188 VOTE 2 Send RequestVote to 1, args: {22 2 59 21}
+167188 VOTE 2 Send RequestVote to 3, args: {22 2 59 21}
+173203 VOTE 3 开始竞选 Term: 23
+173203 VOTE 3 Send RequestVote to 4, args: {23 3 117 18}
+173203 VOTE 3 Send RequestVote to 0, args: {23 3 117 18}
+173204 VOTE 3 Send RequestVote to 1, args: {23 3 117 18}
+173204 VOTE 3 Send RequestVote to 2, args: {23 3 117 18}
+177264 VOTE 2 开始竞选 Term: 24
+177264 VOTE 2 Send RequestVote to 4, args: {24 2 59 21}
+177265 VOTE 2 Send RequestVote to 0, args: {24 2 59 21}
+177265 VOTE 2 Send RequestVote to 3, args: {24 2 59 21}
+177265 VOTE 2 Send RequestVote to 1, args: {24 2 59 21}
+183928 VOTE 2 Be Leader, Term: 24
+190684 VOTE 4 开始竞选 Term: 25
+190686 VOTE 4 Send RequestVote to 3, args: {25 4 226 18}
+190686 VOTE 4 Send RequestVote to 1, args: {25 4 226 18}
+190686 VOTE 4 Send RequestVote to 0, args: {25 4 226 18}
+190686 VOTE 4 Send RequestVote to 2, args: {25 4 226 18}
+194008 VOTE 3 开始竞选 Term: 25
+194008 VOTE 3 Send RequestVote to 4, args: {25 3 62 24}
+194009 VOTE 3 Send RequestVote to 0, args: {25 3 62 24}
+194009 VOTE 3 Send RequestVote to 1, args: {25 3 62 24}
+194010 VOTE 3 Send RequestVote to 2, args: {25 3 62 24}
+197934 VOTE 4 开始竞选 Term: 26
+197935 VOTE 4 Send RequestVote to 3, args: {26 4 226 18}
+197938 VOTE 4 Send RequestVote to 0, args: {26 4 226 18}
+197938 VOTE 4 Send RequestVote to 1, args: {26 4 226 18}
+197938 VOTE 4 Send RequestVote to 2, args: {26 4 226 18}
+200461 VOTE 3 开始竞选 Term: 27
+200461 VOTE 3 Send RequestVote to 4, args: {27 3 62 24}
+200462 VOTE 3 Send RequestVote to 0, args: {27 3 62 24}
+200462 VOTE 3 Send RequestVote to 1, args: {27 3 62 24}
+200462 VOTE 3 Send RequestVote to 2, args: {27 3 62 24}
+205974 VOTE 4 开始竞选 Term: 27
+205974 VOTE 4 Send RequestVote to 3, args: {27 4 226 18}
+205974 VOTE 4 Send RequestVote to 2, args: {27 4 226 18}
+205974 VOTE 4 Send RequestVote to 0, args: {27 4 226 18}
+205974 VOTE 4 Send RequestVote to 1, args: {27 4 226 18}
+209005 VOTE 0 开始竞选 Term: 28
+209006 VOTE 0 Send RequestVote to 4, args: {28 0 335 5}
+209006 VOTE 0 Send RequestVote to 1, args: {28 0 335 5}
+209006 VOTE 0 Send RequestVote to 2, args: {28 0 335 5}
+209006 VOTE 0 Send RequestVote to 3, args: {28 0 335 5}
+209861 VOTE 3 开始竞选 Term: 28
+209862 VOTE 3 Send RequestVote to 4, args: {28 3 62 24}
+209862 VOTE 3 Send RequestVote to 0, args: {28 3 62 24}
+209862 VOTE 3 Send RequestVote to 1, args: {28 3 62 24}
+209862 VOTE 3 Send RequestVote to 2, args: {28 3 62 24}
+215287 VOTE 0 开始竞选 Term: 29
+215295 VOTE 0 Send RequestVote to 4, args: {29 0 335 5}
+215301 VOTE 0 Send RequestVote to 1, args: {29 0 335 5}
+215302 VOTE 0 Send RequestVote to 2, args: {29 0 335 5}
+215302 VOTE 0 Send RequestVote to 3, args: {29 0 335 5}
+218582 VOTE 3 开始竞选 Term: 30
+218582 VOTE 3 Send RequestVote to 4, args: {30 3 62 24}
+218583 VOTE 3 Send RequestVote to 0, args: {30 3 62 24}
+218583 VOTE 3 Send RequestVote to 1, args: {30 3 62 24}
+218583 VOTE 3 Send RequestVote to 2, args: {30 3 62 24}
+222990 VOTE 3 Be Leader, Term: 30
+230005 VOTE 1 开始竞选 Term: 31
+230006 VOTE 1 Send RequestVote to 4, args: {31 1 293 21}
+230006 VOTE 1 Send RequestVote to 0, args: {31 1 293 21}
+230006 VOTE 1 Send RequestVote to 2, args: {31 1 293 21}
+230006 VOTE 1 Send RequestVote to 3, args: {31 1 293 21}
+237864 VOTE 4 开始竞选 Term: 32
+237865 VOTE 4 Send RequestVote to 3, args: {32 4 226 18}
+237865 VOTE 4 Send RequestVote to 0, args: {32 4 226 18}
+237865 VOTE 4 Send RequestVote to 1, args: {32 4 226 18}
+237865 VOTE 4 Send RequestVote to 2, args: {32 4 226 18}
+239545 VOTE 1 开始竞选 Term: 32
+239546 VOTE 1 Send RequestVote to 4, args: {32 1 293 21}
+239546 VOTE 1 Send RequestVote to 0, args: {32 1 293 21}
+239546 VOTE 1 Send RequestVote to 2, args: {32 1 293 21}
+239546 VOTE 1 Send RequestVote to 3, args: {32 1 293 21}
+245432 VOTE 1 Be Leader, Term: 32
+249151 VOTE 2 开始竞选 Term: 33
+249151 VOTE 2 Send RequestVote to 4, args: {33 2 267 24}
+249152 VOTE 2 Send RequestVote to 0, args: {33 2 267 24}
+249152 VOTE 2 Send RequestVote to 1, args: {33 2 267 24}
+249152 VOTE 2 Send RequestVote to 3, args: {33 2 267 24}
+250142 VOTE 3 开始竞选 Term: 33
+250142 VOTE 3 Send RequestVote to 4, args: {33 3 161 30}
+250143 VOTE 3 Send RequestVote to 0, args: {33 3 161 30}
+250143 VOTE 3 Send RequestVote to 1, args: {33 3 161 30}
+250143 VOTE 3 Send RequestVote to 2, args: {33 3 161 30}
+255720 VOTE 4 开始竞选 Term: 34
+255721 VOTE 4 Send RequestVote to 3, args: {34 4 226 18}
+255721 VOTE 4 Send RequestVote to 1, args: {34 4 226 18}
+255722 VOTE 4 Send RequestVote to 2, args: {34 4 226 18}
+255722 VOTE 4 Send RequestVote to 0, args: {34 4 226 18}
+258536 VOTE 2 开始竞选 Term: 34
+258536 VOTE 2 Send RequestVote to 4, args: {34 2 267 24}
+258536 VOTE 2 Send RequestVote to 0, args: {34 2 267 24}
+258537 VOTE 2 Send RequestVote to 1, args: {34 2 267 24}
+258537 VOTE 2 Send RequestVote to 3, args: {34 2 267 24}
+259617 VOTE 3 开始竞选 Term: 35
+259618 VOTE 3 Send RequestVote to 4, args: {35 3 161 30}
+259618 VOTE 3 Send RequestVote to 0, args: {35 3 161 30}
+259618 VOTE 3 Send RequestVote to 2, args: {35 3 161 30}
+259619 VOTE 3 Send RequestVote to 1, args: {35 3 161 30}
+266258 VOTE 2 开始竞选 Term: 35
+266258 VOTE 2 Send RequestVote to 4, args: {35 2 267 24}
+266260 VOTE 2 Send RequestVote to 0, args: {35 2 267 24}
+266260 VOTE 2 Send RequestVote to 1, args: {35 2 267 24}
+266260 VOTE 2 Send RequestVote to 3, args: {35 2 267 24}
+267866 VOTE 3 开始竞选 Term: 36
+267867 VOTE 3 Send RequestVote to 4, args: {36 3 161 30}
+267867 VOTE 3 Send RequestVote to 0, args: {36 3 161 30}
+267867 VOTE 3 Send RequestVote to 1, args: {36 3 161 30}
+267868 VOTE 3 Send RequestVote to 2, args: {36 3 161 30}
+269943 VOTE 3 Be Leader, Term: 36
+270565 LOG1 0 Apply index: 25 to State Machine
+270565 LOG1 0 Apply index: 26 to State Machine
+270565 LOG1 0 Apply index: 27 to State Machine
+270565 LOG1 0 Apply index: 28 to State Machine
+270565 LOG1 0 Apply index: 29 to State Machine
+270565 LOG1 0 Apply index: 30 to State Machine
+270565 LOG1 0 Apply index: 31 to State Machine
+270565 LOG1 0 Apply index: 32 to State Machine
+274186 LOG1 3 Apply index: 33 to State Machine
+274186 LOG1 3 Apply index: 34 to State Machine
+274186 LOG1 3 Apply index: 35 to State Machine
+274186 LOG1 3 Apply index: 36 to State Machine
+274186 LOG1 3 Apply index: 37 to State Machine
+3: log map[1:8194 2:8242 3:4138 4:7245 5:3065 6:5901 7:9816 8:2751 9:670 10:3695 11:7879 12:196 13:3587 14:5939 15:9612 16:70 17:5060 18:1175 19:3233 20:6954 21:9101 22:7153 23:7865 24:5529 25:8451 26:9479 27:3928 28:5714 29:4381 30:5588 31:3159 32:4963 33:1443 34:3695 35:6100 36:9456]; server map[1:8194 2:8242 3:4138 4:7245 5:3065 6:5901 7:9816 8:2751 9:670 10:3695 11:7879 12:196 13:3587 14:5939 15:9612 16:70 17:5060 18:1175 19:3233 20:6954 21:9101 22:7153 23:7865 24:5529 25:8451 26:9479 27:3928 28:5714 29:4381 30:5588 31:3159 32:4963 33:1443 34:3695 35:6100 36:9456 37:5684 38:1544 39:379 40:1996 41:684 42:1186 43:5505 44:4274 45:4654 46:2928 47:5011 48:1860 49:2147 50:5308]
+apply error: commit index=37 server=3 7088 != server=4 5684
+exit status 1
+FAIL	6.5840/raft	27.427s
