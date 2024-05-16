@@ -539,7 +539,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 			reply.ConflictIndex = index
 		}
-
 		return
 	}
 
@@ -570,53 +569,47 @@ func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntrie
 	reply := AppendEntriesReply{}
 	if rf.peers[server].Call("Raft.AppendEntries", args, &reply) {
 		rf.mu.Lock()
+		defer rf.mu.Unlock()
 		if reply.Success {
 			//这里不能直接调用最末端的LogIndex
 			//试想直接使用最末端的LogIndex, 在发送心跳rpc中途，突然有客户端操作进入，获得的最末端的LogIndex是包括新加入的请求的
 			//matchIndex和nextIndex会直接被直接拉高到认为客户端操作已经匹配完成
 			rf.nextIndex[server] = targetLogIndex
 			rf.matchIndex[server] = targetLogIndex - 1
-			//DPrintf("id: %d Append Entries 成功匹配 nextIndex: %d\n", server, targetLogIndex)
 			rf.LeaderRefreshCommitIndex()
 			if rf.lastApplied < rf.commitIndex {
 				rf.applyCond.Signal()
 			}
 		} else {
-			//DPrintf("Id: %d, ConflictTerm: %d, ConflictIndex: %d\n", server, reply.ConflictTerm, reply.ConflictIndex)
+			if reply.Term > rf.currentTerm {
+				rf.currentTerm = reply.Term
+				rf.SetStateType(Follower)
+				rf.votedFor = -1
+				rf.persist()
+				return
+			}
+			Debug(dLog, "Id: %d, ConflictTerm: %d, ConflictIndex: %d\n", server, reply.ConflictTerm, reply.ConflictIndex)
 			if rf.nextIndex[server] > 1 {
 				if reply.ConflictTerm == -1 {
 					rf.nextIndex[server] = reply.ConflictIndex + 1
 				} else {
 					rf.nextIndex[server] = reply.ConflictIndex + 1
 					conflictTerm := reply.ConflictTerm
-					//DPrintf("lenLog: %d, snapTerm:%d snapIndex%d\n",
-					//len(rf.log), rf.log[0].ApplyMsg.SnapshotTerm, rf.log[0].ApplyMsg.SnapshotIndex)
 					for i := len(rf.log) - 1; i >= 1; i-- {
-						//DPrintf("log[%d].Term == %d\n", i, rf.log[i].Term)
 						if rf.log[i].Term == conflictTerm {
 							rf.nextIndex[server] = rf.log[i].CommandIndex
 							break
 						}
 					}
-					//DPrintf("rf.nextIndex[%d] change to %d\n", server, reply.ConflictIndex+1)
 				}
-				//DPrintf("id: %d Append Entries 不匹配 nextIndex: %d\n", server, rf.nextIndex[server])
-			}
-			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
-				rf.SetStateType(Follower)
-				rf.votedFor = -1
-				rf.persist()
 			}
 		}
-		rf.mu.Unlock()
 	}
 	return
 }
 
 func (rf *Raft) GoSendAppendEntries() {
 	for !rf.killed() && rf.GetStateType() == Leader {
-		// 如果服务器是leader，不停的发送包给所有的follower
 		<-rf.heartTimer.C
 		rf.BroadCastAppendEntries()
 		rf.ResetHeartTimer(100)
@@ -647,7 +640,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		}
 		prevLogIndex, prevLogTerm := nextIndex-1, 0
 		if nextIndex-1-offset >= len(rf.log) {
-			log.Printf("id: %d, logIndex: %d offset: %d, lenLog: %d\n", rf.me, nextIndex-1, offset, len(rf.log))
+			Debug(dError, "id: %d, logIndex: %d offset: %d, lenLog: %d\n", rf.me, nextIndex-1, offset, len(rf.log))
 		}
 		prevLog := rf.log[nextIndex-1-offset]
 		if prevLog.CommandValid {
@@ -655,7 +648,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		} else if prevLog.SnapshotValid {
 			prevLogTerm = rf.log[nextIndex-1-offset].SnapshotTerm
 		} else {
-			log.Fatalf("%d Find Error\n", rf.me)
+			log.Fatalf("%d Log Error CommandValid SnapValid All false\n", rf.me)
 		}
 		args := AppendEntriesArgs{
 			Term:         rf.currentTerm,
@@ -724,7 +717,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return -1, -1, false
 	}
 	term := rf.currentTerm
-	//DPrintf("command %v to %d Term: %v\n", command, rf.me, rf.currentTerm)
 	// Your code here (3B).
 	newLog := ApplyMsg{
 		CommandValid: true,
@@ -732,6 +724,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		CommandIndex: rf.getLastLogIndex() + 1,
 		Term:         term,
 	}
+	Debug(dLog, "%d Get A Command In Term: %d, CommandIndex: %d\n", rf.me, rf.currentTerm, newLog.CommandIndex)
 	rf.log = append(rf.log, newLog)
 	rf.persist()
 	return newLog.CommandIndex, term, true
@@ -748,7 +741,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
 }
 
 func (rf *Raft) killed() bool {
@@ -758,7 +750,6 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-
 		// Your code here (3A)
 		// Check if a leader election should be started.
 		outTime := 500 + (rand.Int63() % 300)
@@ -778,7 +769,7 @@ func (rf *Raft) ticker() {
 				for vote := range voteCh {
 					if vote {
 						voteCnt++
-						if voteCnt > len(rf.peers)/2 && rf.GetStateType() == Candidate {
+						if voteCnt+1 > len(rf.peers)/2 && rf.GetStateType() == Candidate {
 							Debug(dVote, "%d Be Leader, Term: %d\n", rf.me, rf.currentTerm)
 							rf.SetStateType(Leader)
 							rf.mu.Lock()
@@ -795,7 +786,6 @@ func (rf *Raft) ticker() {
 					}
 				}
 			}()
-			voteCh <- true
 			var voteChMu sync.Mutex
 			closed := false
 			for index, _ := range rf.peers {
@@ -843,7 +833,6 @@ func (rf *Raft) ticker() {
 		if rf.GetStateType() != Leader {
 			// 如果是Follower，超时说明没收到Leader的心跳，开启选举
 			// 如果是Candidate，超时说明这次选举没结果，开启选举
-			// 所以两个状态都需要计算超时
 			rf.AddDelayTime(ms)
 		}
 		time.Sleep(time.Duration(ms) * time.Millisecond)
@@ -866,16 +855,14 @@ func (rf *Raft) applier() {
 		offset, commitIndex, lastApplied := rf.getLogOffset(), rf.commitIndex, rf.lastApplied
 		entries := make([]ApplyMsg, commitIndex-lastApplied)
 		if commitIndex-offset+1 > len(rf.log) || lastApplied-offset+1 >= len(rf.log) {
-			Debug(dLog, "%d LstApplied: %d, commitIndex: %d, offset: %d, lenLog: %d\n",
+			Debug(dError, "%d LstApplied: %d, commitIndex: %d, offset: %d, lenLog: %d\n",
 				rf.me, lastApplied, commitIndex, offset, len(rf.log))
 		}
 		copy(entries, rf.log[Max(1, lastApplied-offset+1):Max(1, commitIndex-offset+1)])
-		//DPrintf("%d entries Size: %d, from %d to %d\n", rf.me, len(entries), lastApplied, commitIndex)
 		rf.mu.Unlock()
-		// apply 到状态机中
 		for _, entry := range entries {
 			rf.applyCh <- entry
-			Debug(dLog, "%d Apply index: %d to State Machine\n", rf.me, entry.CommandIndex)
+			Debug(dLog, "%d Apply index: %d command: %v\n", rf.me, entry.CommandIndex, entry.Command)
 		}
 		rf.mu.Lock()
 		rf.lastApplied = Max(rf.lastApplied, commitIndex)
