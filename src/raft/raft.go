@@ -81,7 +81,6 @@ type Raft struct {
 	nextIndex  []int
 	matchIndex []int
 
-	stateMu     sync.Mutex
 	state       StateType
 	delayTimeMu sync.Mutex
 	delayTime   int64
@@ -97,16 +96,10 @@ func (rf *Raft) ResetHeartTimer(timeStamp int) {
 }
 
 func (rf *Raft) GetStateType() (state StateType) {
-	rf.stateMu.Lock()
-	defer rf.stateMu.Unlock()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	state = rf.state
 	return state
-}
-
-func (rf *Raft) SetStateType(t StateType) {
-	rf.stateMu.Lock()
-	defer rf.stateMu.Unlock()
-	rf.state = t
 }
 
 func (rf *Raft) GetDelayTime() (t int64) {
@@ -195,7 +188,7 @@ func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	term = rf.currentTerm
-	isleader = rf.GetStateType() == Leader
+	isleader = rf.state == Leader
 	return term, isleader
 }
 
@@ -241,6 +234,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.currentTerm = curTerm
 		rf.votedFor = voteFor
 		rf.log = append(rf.log, logEntries...)
+		Debug(dPersist, "ID: %d ReadPersist log: %v\n", rf.me, rf.log)
 		if SnapshotIndex != 0 {
 			rf.log[0].CommandValid = false
 			rf.log[0].SnapshotValid = true
@@ -315,8 +309,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	if args.Term < rf.currentTerm {
 		return
 	}
-	if rf.GetStateType() != Follower && args.Term >= rf.currentTerm {
-		rf.SetStateType(Follower)
+	if rf.state != Follower && args.Term >= rf.currentTerm {
+		rf.state = Follower
 		rf.votedFor = -1
 	}
 	rf.currentTerm = args.Term
@@ -380,9 +374,7 @@ func (rf *Raft) GoSendInstallSnapshot(peer int) {
 		LastIncludedTerm:  rf.log[0].SnapshotTerm,
 		Data:              rf.Persister.ReadSnapshot(),
 	}
-	//todo 感觉是这里发出去的有问题
 	applySnapshotIndex := rf.log[0].SnapshotIndex
-	//DPrintf("%d GoSendInstallSnapshot: to %d\n", rf.me, peer)
 	rf.mu.Unlock()
 	reply := InstallSnapshotReply{}
 	if rf.peers[peer].Call("Raft.InstallSnapshot", &args, &reply) {
@@ -391,7 +383,7 @@ func (rf *Raft) GoSendInstallSnapshot(peer int) {
 		rf.matchIndex[peer] = applySnapshotIndex
 		if reply.Term > rf.currentTerm {
 			rf.currentTerm = reply.Term
-			rf.SetStateType(Follower)
+			rf.state = Follower
 			rf.votedFor = -1
 			rf.persist()
 		}
@@ -417,21 +409,19 @@ type RequestVoteReply struct {
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	//DPrintf("%d Reveive RequestVote From %d, Term %d\n", rf.me, args.CandidateId, args.Term)
 	// Your code here (3A, 3B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	if rf.currentTerm > args.Term {
 		reply.VoteGranted = false
-		//DPrintf("%d Reveive RequestVote From %d, curTerm: %d,args.Term: %d return false\n",
-		//rf.me, args.CandidateId, rf.currentTerm, args.Term)
+		Debug(dVote, "ID: %d Receive RequestVote From %d reply: %v\n", rf.me, args.CandidateId, reply)
 		return
 	}
 	if args.Term > rf.currentTerm { // 如果服务器发现自己过时了
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
-		rf.SetStateType(Follower)
+		rf.state = Follower
 		rf.persist()
 	}
 	// 接下来检验请求的Candidate能不能通过
@@ -447,13 +437,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		reply.VoteGranted = false
 	}
-	/*
-		DPrintf("%d Reveive RequestVote From %d, args.LastLogTerm: %d curTerm: %d\n"+
-			"args.LstLogIndex: %d, rf.LastLogIndex: %d  return %v\n",
-			rf.me, args.CandidateId, args.LastLogTerm, rf.currentTerm,
-			args.LastLogIndex, rf.getLastLogIndex(),
-			reply.VoteGranted)
-	*/
+	Debug(dVote, "ID: %d Receive RequestVote From %d, ID'S lastLogTerm: %d, lastLogIndex: %d, reply: %v\n",
+		rf.me, args.CandidateId, rfLastLogTerm, rfLastLogIndex, reply)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -510,14 +495,15 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer Debug(dInfo, "ID: %d Receive AppendEntries From %d, Reply %v\n", rf.me, args.LeaderId, reply)
 	reply.Term = rf.currentTerm
 	// 1.Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
 		return
 	}
-	if rf.GetStateType() != Follower && args.Term >= rf.currentTerm {
-		rf.SetStateType(Follower)
+	if rf.state != Follower && args.Term >= rf.currentTerm {
+		rf.state = Follower
 		rf.votedFor = -1
 		rf.persist()
 	}
@@ -553,9 +539,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	// 4.Append any new entries not already in the log
 	if len(args.Entries) > 0 {
-		//DPrintf("%d will Add Entries: %v\n", rf.me, args.Entries[newEntriesPos:])
+		Debug(dLog, "ID: %d Receive AppendEntriesFrom %d will Add Entries: %v\n",
+			rf.me, args.LeaderId, args.Entries[newEntriesPos:])
 		rf.log = append(rf.log, args.Entries[newEntriesPos:]...)
-		//rf.persist()
 	}
 	// 5.If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	rf.commitIndex = Min(args.LeaderCommit, rf.getLastLogIndex())
@@ -567,6 +553,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntriesArgs) {
 	reply := AppendEntriesReply{}
+	Debug(dLog, "ID: %d SendAppendEntries to %d, Term: %d, PrevLogTerm: %d, PrevLogIndex: %d\n",
+		rf.me, server, args.Term, args.PrevLogTerm, args.PrevLogIndex)
 	if rf.peers[server].Call("Raft.AppendEntries", args, &reply) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
@@ -583,12 +571,12 @@ func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntrie
 		} else {
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
-				rf.SetStateType(Follower)
+				rf.state = Follower
 				rf.votedFor = -1
 				rf.persist()
 				return
 			}
-			Debug(dLog, "Id: %d, ConflictTerm: %d, ConflictIndex: %d\n", server, reply.ConflictTerm, reply.ConflictIndex)
+			Debug(dLog, "Id: %d ConflictTerm: %d, ConflictIndex: %d\n", server, reply.ConflictTerm, reply.ConflictIndex)
 			if rf.nextIndex[server] > 1 {
 				if reply.ConflictTerm == -1 {
 					rf.nextIndex[server] = reply.ConflictIndex + 1
@@ -620,10 +608,11 @@ func (rf *Raft) BroadCastAppendEntries() {
 		if peer == rf.me {
 			continue
 		}
-		if rf.GetStateType() != Leader {
+		rf.mu.Lock()
+		if rf.state != Leader {
+			rf.mu.Unlock()
 			return
 		}
-		rf.mu.Lock()
 		offset := rf.getLogOffset()
 		nextIndex := rf.nextIndex[peer]
 		logEntries := make([]ApplyMsg, 0)
@@ -640,7 +629,7 @@ func (rf *Raft) BroadCastAppendEntries() {
 		}
 		prevLogIndex, prevLogTerm := nextIndex-1, 0
 		if nextIndex-1-offset >= len(rf.log) {
-			Debug(dError, "id: %d, logIndex: %d offset: %d, lenLog: %d\n", rf.me, nextIndex-1, offset, len(rf.log))
+			Debug(dError, "ID: %d logIndex: %d offset: %d, lenLog: %d\n", rf.me, nextIndex-1, offset, len(rf.log))
 		}
 		prevLog := rf.log[nextIndex-1-offset]
 		if prevLog.CommandValid {
@@ -713,7 +702,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.mu.Unlock()
 		rf.ResetHeartTimer(0)
 	}()
-	if rf.GetStateType() != Leader {
+	if rf.state != Leader {
 		return -1, -1, false
 	}
 	term := rf.currentTerm
@@ -724,7 +713,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		CommandIndex: rf.getLastLogIndex() + 1,
 		Term:         term,
 	}
-	Debug(dLog, "%d Get A Command In Term: %d, CommandIndex: %d\n", rf.me, rf.currentTerm, newLog.CommandIndex)
+	Debug(dLog, "ID: %d Get A Command In Term: %d, CommandIndex: %d, Command: %v\n",
+		rf.me, rf.currentTerm, newLog.CommandIndex, newLog.Command)
 	rf.log = append(rf.log, newLog)
 	rf.persist()
 	return newLog.CommandIndex, term, true
@@ -754,26 +744,26 @@ func (rf *Raft) ticker() {
 		// Check if a leader election should be started.
 		outTime := 500 + (rand.Int63() % 300)
 		if rf.GetStateType() != Leader && rf.GetDelayTime() > outTime { // 如果发现超时，还没收到leader发来的心跳，那开启领导选举
-			rf.SetStateType(Candidate)
 			rf.mu.Lock()
+			rf.state = Candidate
 			rf.currentTerm++
 			rf.votedFor = rf.me
 			rf.persist()
+			voteTerm := rf.currentTerm
 			rf.mu.Unlock()
 			rf.ClearDelayTime()
-			Debug(dVote, "%d 开始竞选 Term: %d\n", rf.me, rf.currentTerm)
+			Debug(dVote, "ID: %d 开始竞选 Term: %d\n", rf.me, rf.currentTerm)
 
 			var voteCnt int
 			voteCh := make(chan bool)
-			go func() {
+			go func(int) {
 				for vote := range voteCh {
 					if vote {
 						voteCnt++
-						if voteCnt+1 > len(rf.peers)/2 && rf.GetStateType() == Candidate {
-							Debug(dVote, "%d Be Leader, Term: %d\n", rf.me, rf.currentTerm)
-							rf.SetStateType(Leader)
-							rf.mu.Lock()
-							rf.votedFor = -1
+						rf.mu.Lock()
+						if voteCnt+1 > len(rf.peers)/2 && rf.state == Candidate && rf.currentTerm == voteTerm {
+							Debug(dVote, "ID: %d Be Leader, Term: %d\n", rf.me, rf.currentTerm)
+							rf.state = Leader
 							rf.persist()
 							for i := 0; i < len(rf.peers); i++ {
 								rf.nextIndex[i] = rf.getLastLogIndex() + 1
@@ -783,9 +773,10 @@ func (rf *Raft) ticker() {
 							go rf.GoSendAppendEntries()
 							return
 						}
+						rf.mu.Unlock()
 					}
 				}
-			}()
+			}(voteTerm)
 			var voteChMu sync.Mutex
 			closed := false
 			for index, _ := range rf.peers {
@@ -802,16 +793,17 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 				go func(idx int) {
 					reply := RequestVoteReply{}
-					Debug(dVote, "%d Send RequestVote to %d, args: %v\n", rf.me, idx, args)
+					Debug(dVote, "ID: %d Send RequestVote to %d, args: %v\n", rf.me, idx, args)
 					if rf.sendRequestVote(idx, &args, &reply) {
 						voteChMu.Lock()
 						if reply.VoteGranted && !closed {
+							Debug(dVote, "ID: %d, LeaderElection Get One Vote From %d\n", rf.me, idx)
 							voteCh <- true
 						} else {
 							rf.mu.Lock()
 							if reply.Term > rf.currentTerm {
 								//如果受到比自己的term更高的peer的回复，转变成Follower,放弃竞选
-								rf.SetStateType(Follower)
+								rf.state = Follower
 								rf.votedFor = -1
 								rf.currentTerm = reply.Term
 								rf.persist()
@@ -855,14 +847,14 @@ func (rf *Raft) applier() {
 		offset, commitIndex, lastApplied := rf.getLogOffset(), rf.commitIndex, rf.lastApplied
 		entries := make([]ApplyMsg, commitIndex-lastApplied)
 		if commitIndex-offset+1 > len(rf.log) || lastApplied-offset+1 >= len(rf.log) {
-			Debug(dError, "%d LstApplied: %d, commitIndex: %d, offset: %d, lenLog: %d\n",
+			Debug(dError, "ID: %d LstApplied: %d, commitIndex: %d, offset: %d, lenLog: %d\n",
 				rf.me, lastApplied, commitIndex, offset, len(rf.log))
 		}
 		copy(entries, rf.log[Max(1, lastApplied-offset+1):Max(1, commitIndex-offset+1)])
 		rf.mu.Unlock()
 		for _, entry := range entries {
 			rf.applyCh <- entry
-			Debug(dLog, "%d Apply index: %d command: %v\n", rf.me, entry.CommandIndex, entry.Command)
+			Debug(dLog, "ID: %d Apply index: %d command: %v\n", rf.me, entry.CommandIndex, entry.Command)
 		}
 		rf.mu.Lock()
 		rf.lastApplied = Max(rf.lastApplied, commitIndex)

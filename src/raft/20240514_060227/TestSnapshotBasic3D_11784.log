@@ -1,4 +1,0 @@
-Test (3D): snapshots basic ...
-2024/05/14 07:32:44 apply error: server 1 apply out of order, expected index 70, got 71
-exit status 1
-FAIL	6.5840/raft	2.262s
