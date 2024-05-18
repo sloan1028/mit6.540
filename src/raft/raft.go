@@ -407,7 +407,6 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
-// example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
 	rf.mu.Lock()
@@ -630,6 +629,8 @@ func (rf *Raft) BroadCastAppendEntries() {
 		prevLogIndex, prevLogTerm := nextIndex-1, 0
 		if nextIndex-1-offset >= len(rf.log) {
 			Debug(dError, "ID: %d logIndex: %d offset: %d, lenLog: %d\n", rf.me, nextIndex-1, offset, len(rf.log))
+			rf.mu.Unlock()
+			return
 		}
 		prevLog := rf.log[nextIndex-1-offset]
 		if prevLog.CommandValid {

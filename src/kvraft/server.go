@@ -11,35 +11,11 @@ import (
 	"time"
 )
 
-const Debug = false
-const (
-	HandleOpTimeOut = time.Millisecond * 500
-)
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
-}
-
-type OpType int
-
-const (
-	GetOp OpType = iota
-	PutOp
-	AppendOp
-)
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-	Type    OpType
-	OpId    int
-	ClerkId int64
-	Key     string
-	Value   string
+type CommandSession struct {
+	CommandId   int64
+	Value       string
+	Err         Err
+	CommandTerm int
 }
 
 type KVServer struct {
@@ -52,96 +28,36 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 	lastApplied  int // 防止有旧的提交又apply进状态机了
 
-	// Your definitions here.
 	stateMachine map[string]string
 	Session      map[int64]CommandSession
 	notifyChans  map[int]*chan CommandSession
 }
 
-type CommandSession struct {
-	LastCommandId int
-	Value         string
-	Err           Err
-	CommandTerm   int
-}
-
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+func (kv *KVServer) Command(args *CommandRequest, reply *CommandResponse) {
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
-
-	option := Op{
-		ClerkId: args.ClerkId,
-		OpId:    args.CommandId,
-		Type:    GetOp,
-		Key:     args.Key,
+	if args.Op != GetOp {
+		kv.mu.Lock()
+		if res, ok := kv.Session[args.ClerkId]; ok {
+			if res.CommandId == args.CommandId && res.Err == OK {
+				reply.Err = OK
+				kv.mu.Unlock()
+				return
+			}
+		}
+		kv.mu.Unlock()
 	}
-	res := kv.handleOp(option)
+
+	res := kv.handleOp(*args)
 	reply.Err = res.Err
 	reply.Value = res.Value
 }
 
-func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	if _, isLeader := kv.rf.GetState(); !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	kv.mu.Lock()
-	if res, ok := kv.Session[args.ClerkId]; ok {
-		if res.LastCommandId == args.CommandId && res.Err == OK {
-			reply.Err = OK
-			kv.mu.Unlock()
-			return
-		}
-	}
-	kv.mu.Unlock()
-
-	option := Op{
-		ClerkId: args.ClerkId,
-		OpId:    args.CommandId,
-		Type:    PutOp,
-		Key:     args.Key,
-		Value:   args.Value,
-	}
-	res := kv.handleOp(option)
-	reply.Err = res.Err
-}
-
-func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	if _, isLeader := kv.rf.GetState(); !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	kv.mu.Lock()
-	if res, ok := kv.Session[args.ClerkId]; ok {
-		if res.LastCommandId == args.CommandId && res.Err == OK {
-			reply.Err = OK
-			kv.mu.Unlock()
-			return
-		}
-	}
-	kv.mu.Unlock()
-
-	option := Op{
-		ClerkId: args.ClerkId,
-		OpId:    args.CommandId,
-		Type:    AppendOp,
-		Key:     args.Key,
-		Value:   args.Value,
-	}
-	res := kv.handleOp(option)
-	reply.Err = res.Err
-}
-
-func (kv *KVServer) handleOp(operation Op) (result CommandSession) {
-	//DPrintf("%d 准备添加ClerckId: %v, OpId: %v 到raft里\n", kv.me, operation.ClerkId, operation.OpId)
-	index, term, isLeader := kv.rf.Start(operation)
+func (kv *KVServer) handleOp(commandRequest CommandRequest) (result CommandSession) {
+	Debug(dInfo, "ID: %d Add Op ClerkId: %v, OpId: %v to raft\n", kv.me, commandRequest.ClerkId, commandRequest.CommandId)
+	index, term, isLeader := kv.rf.Start(commandRequest)
 	if !isLeader {
 		result.Err = ErrWrongLeader
 		return
@@ -157,16 +73,15 @@ func (kv *KVServer) handleOp(operation Op) (result CommandSession) {
 		delete(kv.notifyChans, index)
 		close(newCh)
 		kv.mu.Unlock()
-		//log.Printf("time: %v", time.Since(tt))
+		//Debug(dTimer, "time: %v", time.Since(tt))
 	}()
 
 	select {
-	case <-time.After(HandleOpTimeOut):
+	case <-time.After(500 * time.Millisecond):
 		result.Err = ErrTimeOut
 		return
 	case msg, success := <-newCh:
-		//DPrintf("%d 接收到ClerckId: %v, OpId: %v, Index: %v,"+
-		//"result: %v, commandTerm: %d, term: %d\n", kv.me, operation.ClerkId, operation.OpId, index, msg.Err, msg.CommandTerm, term)
+		Debug(dLog, "ID: %d 接收到CommandTerm: %d, Index: %v", kv.me, msg.CommandTerm, msg.CommandId)
 		if success && msg.CommandTerm == term {
 			result = msg
 			return
@@ -188,7 +103,6 @@ func (kv *KVServer) handleOp(operation Op) (result CommandSession) {
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	// Your code here, if desired.
 }
 
 func (kv *KVServer) killed() bool {
@@ -201,15 +115,14 @@ func (kv *KVServer) ListenApplyCh() {
 		select {
 		case applyMsg := <-kv.applyCh:
 			if applyMsg.CommandValid {
-				DPrintf("Kvraft: ID: %d, GetCommandApplyMsg, Index: %d\n", kv.me, applyMsg.CommandIndex)
+				Debug(dLog, "Kvraft: ID: %d, GetCommandApplyMsg, Index: %d\n", kv.me, applyMsg.CommandIndex)
 				kv.parseApplyMsgToCommand(&applyMsg)
 				kv.checkDoSnapshot() // 检查是否需要执行快照
 			} else if applyMsg.SnapshotValid {
-				DPrintf("Kvraft: ID: %d, GetSnapshotApplyMsg, Index: %d\n", kv.me, applyMsg.SnapshotIndex)
-				// 处理快照
+				Debug(dSnap, "Kvraft: ID: %d, GetSnapshotApplyMsg, Index: %d\n", kv.me, applyMsg.SnapshotIndex)
 				kv.ReadSnapshot(applyMsg.Snapshot)
 			} else {
-				DPrintf("ApplyMsg Type Fault!!!\n")
+				Debug(dError, "ApplyMsg Type Fault!!!\n")
 			}
 		}
 	}
@@ -224,15 +137,10 @@ func (kv *KVServer) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
 	}
 	kv.lastApplied = applyMsg.CommandIndex
 	var response CommandSession
-	command, _ := applyMsg.Command.(Op)
-	if command.Type == AppendOp {
-		DPrintf("Id: %d ParseApplyMsgToCommandIndex: %d clerkId: %v, opId: %v, key: %v, value: %v\n",
-			kv.me, applyMsg.CommandIndex, command.ClerkId, command.OpId, command.Key, command.Value)
-	}
-	if command.Type != GetOp && kv.isDuplicateRequest(command.ClerkId, command.OpId) {
+	command, _ := applyMsg.Command.(CommandRequest)
+	if command.Op != GetOp && kv.isDuplicateRequest(command.ClerkId, command.CommandId) {
 		command, _ := kv.Session[command.ClerkId]
 		response = command
-		DPrintf("isDuplicateRequest")
 	} else {
 		response = kv.executeStateMachine(&command, applyMsg.Term)
 	}
@@ -240,35 +148,33 @@ func (kv *KVServer) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
 	// only notify related channel for currentTerm's log when node is leader
 	if currentTerm, isLeader := kv.rf.GetState(); isLeader && applyMsg.Term == currentTerm {
 		response.CommandTerm = applyMsg.Term
-		//DPrintf("%d 准备返回一条response给commandIndex: %d\n", kv.me, applyMsg.CommandIndex)
-		if ch := kv.notifyChans[applyMsg.CommandIndex]; ch != nil {
-			//DPrintf("%d Apply response:Term: %v commandId: %v err: %v to ch\n",
-			//kv.me, response.CommandTerm, response.LastCommandId, response.Err)
-			*ch <- response // 注意这里使用 *ch 来解引用指针
-		} else {
-			// 可能需要处理 nil 指针的情况
-			DPrintf("-----Channel is nil at index: %d\n", applyMsg.CommandIndex)
+		if ch, ok := kv.notifyChans[applyMsg.CommandIndex]; ok {
+			select {
+			case *ch <- response: // 注意这里使用 *ch 来解引用指针
+				// 成功发送
+			case <-time.After(time.Millisecond * 100): // 发送超时
+				// 超时处理
+			}
 		}
 	}
 }
 
-func (kv *KVServer) isDuplicateRequest(clerkId int64, opId int) bool {
+func (kv *KVServer) isDuplicateRequest(clerkId int64, opId int64) bool {
 	if res, ok := kv.Session[clerkId]; ok {
-		if res.LastCommandId == opId {
+		if res.CommandId == opId {
 			return true
 		}
 	}
 	return false
 }
 
-func (kv *KVServer) executeStateMachine(operation *Op, term int) (session CommandSession) {
-	session.LastCommandId = operation.OpId
+func (kv *KVServer) executeStateMachine(operation *CommandRequest, term int) (session CommandSession) {
+	session.CommandId = operation.CommandId
 	session.CommandTerm = term
 	session.Err = OK
-	switch operation.Type {
+	switch operation.Op {
 	case GetOp:
 		session.Value = kv.stateMachine[operation.Key]
-		//kv.Session.Store(operation.ClerkId, session)
 		break
 	case PutOp:
 		kv.stateMachine[operation.Key] = operation.Value
@@ -315,7 +221,7 @@ func (kv *KVServer) ReadSnapshot(snapshot []byte) {
 		log.Fatalf("%v Decode error %v\n", d, snapshot)
 	} else {
 		if lastApplied <= kv.lastApplied {
-			DPrintf("Kvraft ID: %d ReadSnapshot, lastApplied: %d, kv.lastApplied: %d, 大失败！\n", kv.me, lastApplied, kv.lastApplied)
+			Debug(dError, "Kvraft ID: %d ReadSnapshot, lastApplied: %d, kv.lastApplied: %d, 大失败！\n", kv.me, lastApplied, kv.lastApplied)
 			return
 		}
 		kv.stateMachine = hashTable
@@ -339,7 +245,7 @@ func (kv *KVServer) ReadSnapshot(snapshot []byte) {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(CommandRequest{})
 	labgob.Register(CommandSession{})
 
 	kv := new(KVServer)

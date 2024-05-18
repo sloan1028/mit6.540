@@ -31,7 +31,7 @@ const (
 )
 
 func getVerbosity() int {
-	return 1
+	return 0
 	/*
 		v := os.Getenv("VERBOSE")
 		level := 0

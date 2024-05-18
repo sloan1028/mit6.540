@@ -33,9 +33,6 @@ type CommandRequest struct {
 	Op        Operation
 	CommandId int64
 	ClerkId   int64
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
 }
 
 type CommandResponse struct {
