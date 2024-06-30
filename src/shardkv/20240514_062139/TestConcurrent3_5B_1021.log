@@ -1,7 +1,0 @@
-Test (5B): concurrent configuration change and restart...
-  ... Passed
---- FAIL: TestConcurrent3_5B (121.78s)
-    config.go:81: test took longer than 120 seconds
-FAIL
-exit status 1
-FAIL	6.5840/shardkv	121.835s

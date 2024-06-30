@@ -1,38 +1,19 @@
 package shardkv
 
 import (
+	"6.5840/labgob"
 	"6.5840/labrpc"
+	"6.5840/raft"
 	"6.5840/shardctrler"
 	"bytes"
 	"log"
+	"sync"
 	"time"
 )
-import "6.5840/raft"
-import "sync"
-import "6.5840/labgob"
 
-const Debug = false
 const (
 	HandleOpTimeOut = time.Millisecond * 500
 )
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
-}
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-	Type    Operation
-	OpId    int64
-	ClerkId int64
-	Key     string
-	Value   string
-}
 
 type ShardKV struct {
 	mu           sync.Mutex
@@ -74,8 +55,10 @@ func (kv *ShardKV) Command(args *CommandRequest, reply *CommandResponse) {
 	}
 	shard := key2shard(args.Key)
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d Command Get Lock1\n", kv.gid, kv.me)
 	gid := kv.cfg.Shards[shard]
 	kv.mu.Unlock()
+	Debug(dLock, "GID: %d, ID: %d Command UnLock1\n", kv.gid, kv.me)
 
 	if kv.gid != gid {
 		reply.Err = ErrWrongGroup
@@ -83,43 +66,43 @@ func (kv *ShardKV) Command(args *CommandRequest, reply *CommandResponse) {
 	}
 	if args.Op != GetOp {
 		kv.mu.Lock()
+		Debug(dLock, "GID: %d, ID: %d Command Get Lock2\n", kv.gid, kv.me)
 		if res, ok := kv.Session[args.ClerkId]; ok {
 			if res.LastCommandId == args.CommandId && res.Err == OK {
 				reply.Err = OK
 				kv.mu.Unlock()
+				Debug(dLock, "GID: %d, ID: %d Command UnLock2\n", kv.gid, kv.me)
 				return
 			}
 		}
 		kv.mu.Unlock()
+		Debug(dLock, "GID: %d, ID: %d Command UnLock2\n", kv.gid, kv.me)
 	}
-	option := Op{
-		ClerkId: args.ClerkId,
-		OpId:    args.CommandId,
-		Key:     args.Key,
-		Value:   args.Value,
-		Type:    args.Op,
-	}
-	res := kv.handleOp(option)
+	res := kv.handleOp(*args)
 	reply.Err = res.Err
 	reply.Value = res.Value
 }
 
-func (kv *ShardKV) handleOp(operation Op) (result CommandSession) {
+func (kv *ShardKV) handleOp(operation CommandRequest) (result CommandSession) {
 	index, term, isLeader := kv.rf.Start(operation)
 	if !isLeader {
 		result.Err = ErrWrongLeader
 		return
 	}
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d HandleOp Get Lock1\n", kv.gid, kv.me)
 	newCh := make(chan CommandSession)
 	kv.notifyChans[index] = &newCh
 	kv.mu.Unlock()
+	Debug(dLock, "GID: %d, ID: %d HandleOp UnLock1\n", kv.gid, kv.me)
 
 	defer func() {
 		kv.mu.Lock()
+		Debug(dLock, "GID: %d, ID: %d HandleOp Get Lock2\n", kv.gid, kv.me)
 		delete(kv.notifyChans, index)
 		close(newCh)
 		kv.mu.Unlock()
+		Debug(dLock, "GID: %d, ID: %d HandleOp UnLock12\n", kv.gid, kv.me)
 	}()
 
 	select {
@@ -127,8 +110,6 @@ func (kv *ShardKV) handleOp(operation Op) (result CommandSession) {
 		result.Err = ErrTimeOut
 		return
 	case msg, success := <-newCh:
-		//DPrintf("%d 接收到ClerckId: %v, OpId: %v, Index: %v,"+
-		//"result: %v, commandTerm: %d, term: %d\n", kv.me, operation.ClerkId, operation.OpId, index, msg.Err, msg.CommandTerm, term)
 		if success && msg.CommandTerm == term {
 			result = msg
 			return
@@ -154,22 +135,22 @@ func (kv *ShardKV) ListenApplyCh() {
 		case applyMsg := <-kv.applyCh:
 			if _, ok := applyMsg.Command.(shardctrler.Config); ok {
 				kv.applyCfg(&applyMsg)
-				kv.checkDoSnapshot() // 检查是否需要执行快照
+				kv.checkDoSnapshot()
 			} else if _, ok := applyMsg.Command.(MigrateReply); ok {
 				kv.applyShard(&applyMsg)
-				kv.checkDoSnapshot() // 检查是否需要执行快照
+				kv.checkDoSnapshot()
 			} else if _, ok := applyMsg.Command.(GcClearArgs); ok {
 				kv.applyGarbageCollection(&applyMsg)
-				kv.checkDoSnapshot() // 检查是否需要执行快照
+				kv.checkDoSnapshot()
 			} else {
 				if applyMsg.CommandValid {
 					kv.parseApplyMsgToCommand(&applyMsg)
-					kv.checkDoSnapshot() // 检查是否需要执行快照
+					kv.checkDoSnapshot()
 				} else if applyMsg.SnapshotValid {
 					// 处理快照
 					kv.ReadSnapshot(applyMsg.Snapshot)
 				} else {
-					DPrintf("ApplyMsg Type Fault!!!\n")
+					Debug(dError, "ApplyMsg Type Fault!!!\n")
 				}
 			}
 		}
@@ -178,19 +159,21 @@ func (kv *ShardKV) ListenApplyCh() {
 
 func (kv *ShardKV) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d parseApplyMsgToCommand Get Lock1\n", kv.gid, kv.me)
 	defer kv.mu.Unlock()
+	defer Debug(dLock, "GID: %d, ID: %d parseApplyMsgToCommand UnLock1\n", kv.gid, kv.me)
 	// 可能会有旧的applyMsg进来
 	if applyMsg.CommandIndex <= kv.lastApplied {
 		return
 	}
 	kv.lastApplied = applyMsg.CommandIndex
 	var response CommandSession
-	command, _ := applyMsg.Command.(Op)
+	command, _ := applyMsg.Command.(CommandRequest)
 	shard := key2shard(command.Key)
 	if _, ok := kv.myShards[shard]; !ok {
 		response.Err = ErrWrongGroup
 	} else {
-		if command.Type != GetOp && kv.isDuplicateRequest(command.ClerkId, command.OpId) {
+		if command.Op != GetOp && kv.isDuplicateRequest(command.ClerkId, command.CommandId) {
 			command, _ := kv.Session[command.ClerkId]
 			response = command
 		} else {
@@ -221,11 +204,11 @@ func (kv *ShardKV) isDuplicateRequest(clerkId int64, opId int64) bool {
 	return false
 }
 
-func (kv *ShardKV) executeStateMachine(operation *Op, term int) (session CommandSession) {
-	session.LastCommandId = operation.OpId
+func (kv *ShardKV) executeStateMachine(operation *CommandRequest, term int) (session CommandSession) {
+	session.LastCommandId = operation.CommandId
 	session.CommandTerm = term
 	session.Err = OK
-	switch operation.Type {
+	switch operation.Op {
 	case GetOp:
 		session.Value = kv.stateMachine[operation.Key]
 		break
@@ -246,7 +229,9 @@ func (kv *ShardKV) executeStateMachine(operation *Op, term int) (session Command
 func (kv *ShardKV) applyShard(applyMsg *raft.ApplyMsg) {
 	migrateData := applyMsg.Command.(MigrateReply)
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d applyShard Get Lock\n", kv.gid, kv.me)
 	defer kv.mu.Unlock()
+	defer Debug(dLock, "GID: %d, ID: %d applyShard UnLock\n", kv.gid, kv.me)
 	if migrateData.ConfigNum != kv.cfg.Num-1 { //我当前需要的migrateData,在发送者那里应该是我当前的cfgNum-1
 		return
 	}
@@ -272,7 +257,9 @@ func (kv *ShardKV) applyShard(applyMsg *raft.ApplyMsg) {
 func (kv *ShardKV) applyGarbageCollection(applyMsg *raft.ApplyMsg) {
 	gcData := applyMsg.Command.(GcClearArgs)
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d applyGarbageCollection Get Lock1\n", kv.gid, kv.me)
 	defer kv.mu.Unlock()
+	defer Debug(dLock, "GID: %d, ID: %d applyGarbageCollection UnLock\n", kv.gid, kv.me)
 	kv.lastApplied = applyMsg.CommandIndex
 	if _, ok := kv.toOutShards[gcData.ConfigNum]; ok {
 		delete(kv.toOutShards[gcData.ConfigNum], gcData.Shard)
@@ -297,7 +284,9 @@ func (kv *ShardKV) applyGarbageCollection(applyMsg *raft.ApplyMsg) {
 func (kv *ShardKV) applyCfg(applyMsg *raft.ApplyMsg) {
 	cfg := applyMsg.Command.(shardctrler.Config)
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d applyCfg Get Lock1\n", kv.gid, kv.me)
 	defer kv.mu.Unlock()
+	defer Debug(dLock, "GID: %d, ID: %d applyCfg UnLock1\n", kv.gid, kv.me)
 	if cfg.Num <= kv.cfg.Num {
 		return
 	}
@@ -349,7 +338,6 @@ func (kv *ShardKV) checkDoSnapshot() {
 		e.Encode(kv.garbageList)
 		lastApplied := kv.lastApplied
 		kv.mu.Unlock()
-		//DPrintf("GID: %d, id: %d, DoSnapshot\n", kv.gid, kv.me)
 		go kv.rf.Snapshot(lastApplied, w.Bytes())
 		return
 	}
@@ -399,13 +387,16 @@ func (kv *ShardKV) ReadSnapshot(snapshot []byte) {
 
 func (kv *ShardKV) PollNewCfg() {
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d PollNewCfg Get Lock1\n", kv.gid, kv.me)
 	// 当前更改Configuration还未结束，不要去再次拉新
 	if len(kv.comInShards) > 0 {
 		kv.mu.Unlock()
+		Debug(dLock, "GID: %d, ID: %d PollNewCfg UnLock1\n", kv.gid, kv.me)
 		return
 	}
 	next := kv.cfg.Num + 1
 	kv.mu.Unlock()
+	Debug(dLock, "GID: %d, ID: %d PollNewCfg UnLock1\n", kv.gid, kv.me)
 	cfg := kv.mck.Query(next)
 	if cfg.Num == next {
 		kv.rf.Start(cfg)
@@ -420,8 +411,9 @@ func (kv *ShardKV) ShardMigration(args *MigrateArgs, reply *MigrateReply) {
 		return
 	}
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d ShardMigration Get Lock1\n", kv.gid, kv.me)
 	defer kv.mu.Unlock()
-
+	defer Debug(dLock, "GID: %d, ID: %d ShardMigration UnLock\n", kv.gid, kv.me)
 	reply.Err = ErrWrongGroup
 	if args.ConfigNum >= kv.cfg.Num { // 为什么==也要return? 因为需要的args的configNum来自oldConfigNum，如果相等说明本方也落后了
 		return
@@ -435,7 +427,6 @@ func (kv *ShardKV) ShardMigration(args *MigrateArgs, reply *MigrateReply) {
 	for k, v := range kv.toOutShards[args.ConfigNum][args.Shard] {
 		reply.DB[k] = v
 	}
-	//DPrintf("ID: %d, replyDb: %v, configNum: %d, shard: %d\n", kv.me, reply.DB, args.ConfigNum, args.Shard)
 }
 
 func (kv *ShardKV) GarbageCollection(args *GcClearArgs, reply *GcClearReply) {
@@ -445,15 +436,19 @@ func (kv *ShardKV) GarbageCollection(args *GcClearArgs, reply *GcClearReply) {
 		return
 	}
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d GarbageCollection Get Lock1\n", kv.gid, kv.me)
 	if _, ok := kv.toOutShards[args.ConfigNum]; !ok {
 		kv.mu.Unlock()
+		defer Debug(dLock, "GID: %d, ID: %d GarbageCollection UnLock2\n", kv.gid, kv.me)
 		return
 	}
 	if _, ok := kv.toOutShards[args.ConfigNum][args.Shard]; !ok {
 		kv.mu.Unlock()
+		defer Debug(dLock, "GID: %d, ID: %d GarbageCollection UnLock3\n", kv.gid, kv.me)
 		return
 	}
 	kv.mu.Unlock()
+	defer Debug(dLock, "GID: %d, ID: %d GarbageCollection UnLock4\n", kv.gid, kv.me)
 	reply.Err = kv.handleGC(args)
 }
 func (kv *ShardKV) handleGC(args *GcClearArgs) Err {
@@ -462,15 +457,20 @@ func (kv *ShardKV) handleGC(args *GcClearArgs) Err {
 		return ErrWrongLeader
 	}
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d handleGC Get Lock1\n", kv.gid, kv.me)
+
 	newCh := make(chan CommandSession)
 	kv.notifyChans[index] = &newCh
 	kv.mu.Unlock()
+	Debug(dLock, "GID: %d, ID: %d handleGC UnLock1\n", kv.gid, kv.me)
 
 	defer func() {
 		kv.mu.Lock()
+		Debug(dLock, "GID: %d, ID: %d handleGC Get Lock2\n", kv.gid, kv.me)
 		delete(kv.notifyChans, index)
 		close(newCh)
 		kv.mu.Unlock()
+		Debug(dLock, "GID: %d, ID: %d handleGC UnLock2\n", kv.gid, kv.me)
 	}()
 
 	select {
@@ -487,8 +487,10 @@ func (kv *ShardKV) handleGC(args *GcClearArgs) Err {
 
 func (kv *ShardKV) tryPullShard() {
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d tryPullShard Get Lock1\n", kv.gid, kv.me)
 	if len(kv.comInShards) == 0 {
 		kv.mu.Unlock()
+		Debug(dLock, "GID: %d, ID: %d tryPullShard UnLock1\n", kv.gid, kv.me)
 		return
 	}
 	var wait sync.WaitGroup
@@ -516,6 +518,8 @@ func (kv *ShardKV) tryPullShard() {
 
 func (kv *ShardKV) tryGcClear() {
 	kv.mu.Lock()
+	Debug(dLock, "GID: %d, ID: %d tryGcClear Get Lock1\n", kv.gid, kv.me)
+	defer Debug(dLock, "GID: %d, ID: %d tryGcClear UnLock1\n", kv.gid, kv.me)
 	if len(kv.garbageList) == 0 {
 		kv.mu.Unlock()
 		return
@@ -535,11 +539,13 @@ func (kv *ShardKV) tryGcClear() {
 					if ok := srv.Call("ShardKV.GarbageCollection", &args, &reply); ok {
 						if reply.Err == OK {
 							kv.mu.Lock()
+							Debug(dLock, "GID: %d, ID: %d tryGcClear Get Lock2\n", kv.gid, kv.me)
 							delete(kv.garbageList[cfgNum], shard)
 							if len(kv.garbageList[cfgNum]) == 0 {
 								delete(kv.garbageList, cfgNum)
 							}
 							kv.mu.Unlock()
+							Debug(dLock, "GID: %d, ID: %d tryGcClear UnLock1\n", kv.gid, kv.me)
 						}
 					}
 				}
@@ -579,7 +585,7 @@ func (kv *ShardKV) tryGcClear() {
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(CommandRequest{})
 	labgob.Register(CommandSession{})
 	labgob.Register(shardctrler.Config{})
 	labgob.Register(MigrateReply{})

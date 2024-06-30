@@ -91,7 +91,6 @@ func (sc *ShardCtrler) handleOp(command CommandRequest) (result CommandSession) 
 		result.Err = ErrWrongLeader
 		return
 	}
-	//DPrintf("ID: %d, Start command %v\n", sc.me, command)
 	sc.mu.Lock()
 	newCh := make(chan CommandSession)
 	sc.notifyChans[index] = &newCh
@@ -138,10 +137,7 @@ func (sc *ShardCtrler) ListenApplyCh() {
 		select {
 		case applyMsg := <-sc.applyCh:
 			if applyMsg.CommandValid {
-				//DPrintf("Kvraft: ID: %d, GetCommandApplyMsg, Index: %d\n", sc.me, applyMsg.CommandIndex)
 				sc.parseApplyMsgToCommand(&applyMsg)
-			} else {
-				DPrintf("ApplyMsg Type Fault!!!\n")
 			}
 		}
 	}
@@ -150,14 +146,12 @@ func (sc *ShardCtrler) ListenApplyCh() {
 func (sc *ShardCtrler) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	// 可能会有旧的applyMsg进来
 	if applyMsg.CommandIndex <= sc.lastApplied {
 		return
 	}
 	sc.lastApplied = applyMsg.CommandIndex
 	var response CommandSession
 	command, _ := applyMsg.Command.(CommandRequest)
-	//DPrintf("ID: %d, Receive Command: %v\n", sc.me, command)
 	if command.Op != Query && sc.isDuplicateRequest(command.ClientId, command.CommandId) {
 		command, _ := sc.Session[command.ClientId]
 		response = command
@@ -165,7 +159,6 @@ func (sc *ShardCtrler) parseApplyMsgToCommand(applyMsg *raft.ApplyMsg) {
 		response = sc.executeStateMachine(&command, applyMsg.Term)
 	}
 
-	// only notify related channel for currentTerm's log when node is leader
 	if currentTerm, isLeader := sc.rf.GetState(); isLeader && applyMsg.Term == currentTerm {
 		response.CommandTerm = applyMsg.Term
 		if ch := sc.notifyChans[applyMsg.CommandIndex]; ch != nil {
@@ -194,11 +187,9 @@ func (sc *ShardCtrler) executeStateMachine(operation *CommandRequest, term int) 
 		sc.HandleJoin(operation.Servers)
 		break
 	case Leave:
-		DPrintf("HandleLeave")
 		sc.HandleLeave(operation.GIDs)
 		break
 	case Move:
-		DPrintf("HandleMove")
 		sc.HandleMove(operation.Shard, operation.GID)
 		break
 	case Query:
@@ -209,7 +200,6 @@ func (sc *ShardCtrler) executeStateMachine(operation *CommandRequest, term int) 
 }
 
 func (sc *ShardCtrler) HandleJoin(groups map[int][]string) {
-	DPrintf("ID: %d HandleJoin %v\n", sc.me, groups)
 	lastConfig := sc.configs[len(sc.configs)-1]
 	newConfig := Config{len(sc.configs), lastConfig.Shards, deepCopy(lastConfig.Groups)}
 	for gid, servers := range groups {
@@ -221,7 +211,6 @@ func (sc *ShardCtrler) HandleJoin(groups map[int][]string) {
 		}
 	}
 	g2s := Group2Shards(newConfig)
-	DPrintf("ID: %d g2s :%v", sc.me, g2s)
 	for {
 		maxGid, minGid := GetGIDWithMaximumShards(g2s), GetGIDWithMinimumShards(g2s)
 		if maxGid != 0 && len(g2s[maxGid])-len(g2s[minGid]) <= 1 {
@@ -236,7 +225,6 @@ func (sc *ShardCtrler) HandleJoin(groups map[int][]string) {
 			newShards[shard] = gid
 		}
 	}
-	DPrintf("ID: %d, newShards: %v\n", sc.me, newShards)
 	newConfig.Shards = newShards
 	sc.configs = append(sc.configs, newConfig)
 	return
@@ -275,7 +263,6 @@ func (sc *ShardCtrler) HandleLeave(gids []int) {
 }
 
 func (sc *ShardCtrler) HandleQuery(num int) Config {
-	//DPrintf("ID: %d HandleQuery\n", sc.me)
 	if num == -1 || num >= len(sc.configs) {
 		return sc.configs[len(sc.configs)-1]
 	}

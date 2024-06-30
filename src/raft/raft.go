@@ -164,7 +164,6 @@ func (rf *Raft) getLastLogTerm() int {
 func (rf *Raft) getLogTerm(logIndex int) int {
 	offset := rf.getLogOffset()
 	if logIndex-offset >= len(rf.log) {
-		//log2.Printf("----------%d getLogTerm Error!! logIndex: %d, offset: %d, logLen: %d\n", rf.me, logIndex, offset, len(rf.log))
 		return -1
 	}
 	if logIndex-offset > 0 {
@@ -618,7 +617,6 @@ func (rf *Raft) BroadCastAppendEntries() {
 		if nextIndex <= offset {
 			// 这里如果nextIndex还很小，而lastIndex和offset已经拉高了，
 			// 说明nextIndex已经在快照中了，需要InstallSnapshotRPC来协助了
-			// DPrintf("%d GoSendInstallSnapshot: to %d\n", rf.me, peer)
 			go rf.GoSendInstallSnapshot(peer)
 			rf.mu.Unlock()
 			continue
@@ -847,10 +845,6 @@ func (rf *Raft) applier() {
 		}
 		offset, commitIndex, lastApplied := rf.getLogOffset(), rf.commitIndex, rf.lastApplied
 		entries := make([]ApplyMsg, commitIndex-lastApplied)
-		if commitIndex-offset+1 > len(rf.log) || lastApplied-offset+1 >= len(rf.log) {
-			Debug(dError, "ID: %d LstApplied: %d, commitIndex: %d, offset: %d, lenLog: %d\n",
-				rf.me, lastApplied, commitIndex, offset, len(rf.log))
-		}
 		copy(entries, rf.log[Max(1, lastApplied-offset+1):Max(1, commitIndex-offset+1)])
 		rf.mu.Unlock()
 		for _, entry := range entries {
