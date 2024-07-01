@@ -88,7 +88,23 @@ type Raft struct {
 	applyCh                chan ApplyMsg
 	isNeedApplyingSnapshot bool
 
+	leaseEndAt time.Time
+
 	heartTimer *time.Timer
+}
+
+const (
+	ElectionTimeoutMin = int64(500 * time.Millisecond)
+	LeaseDuration      = 400 * time.Millisecond
+)
+
+type Lease struct {
+	leaseVote  int
+	leaseEndAt time.Time
+}
+
+func (rf *Raft) lease() *Lease {
+	return &Lease{1, time.Now().Add(LeaseDuration)}
 }
 
 func (rf *Raft) ResetHeartTimer(timeStamp int) {
@@ -187,7 +203,7 @@ func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	term = rf.currentTerm
-	isleader = rf.state == Leader
+	isleader = rf.state == Leader && time.Now().Before(rf.leaseEndAt)
 	return term, isleader
 }
 
@@ -549,7 +565,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.persist()
 }
 
-func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntriesArgs) {
+func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntriesArgs, lease *Lease) {
 	reply := AppendEntriesReply{}
 	Debug(dLog, "ID: %d SendAppendEntries to %d, Term: %d, PrevLogTerm: %d, PrevLogIndex: %d\n",
 		rf.me, server, args.Term, args.PrevLogTerm, args.PrevLogIndex)
@@ -565,6 +581,12 @@ func (rf *Raft) SendAppendEntries(server, targetLogIndex int, args *AppendEntrie
 			rf.LeaderRefreshCommitIndex()
 			if rf.lastApplied < rf.commitIndex {
 				rf.applyCond.Signal()
+			}
+			lease.leaseVote++
+			if lease.leaseVote >= len(rf.peers)/2 {
+				if rf.leaseEndAt.Before(lease.leaseEndAt) {
+					rf.leaseEndAt = lease.leaseEndAt
+				}
 			}
 		} else {
 			if reply.Term > rf.currentTerm {
@@ -654,7 +676,10 @@ func (rf *Raft) BroadCastAppendEntries() {
 		// 一个遍历的前方的rpc已经回包告诉这个落后Leader落后了，Leader会修改Term和状态
 		// 此时其他协程其实并不知道Leader已经变成follower了，而且还会读到这个节点获得的最新Term
 		// 此时发送的rpc会被检查并通过，因为term已经变成正常的了
-		go rf.SendAppendEntries(peer, targetLogIndex, &args)
+
+		lease := rf.lease()
+
+		go rf.SendAppendEntries(peer, targetLogIndex, &args, lease)
 	}
 }
 
@@ -741,7 +766,7 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		// Your code here (3A)
 		// Check if a leader election should be started.
-		outTime := 500 + (rand.Int63() % 300)
+		outTime := ElectionTimeoutMin + (rand.Int63() % 300)
 		if rf.GetStateType() != Leader && rf.GetDelayTime() > outTime { // 如果发现超时，还没收到leader发来的心跳，那开启领导选举
 			rf.mu.Lock()
 			rf.state = Candidate
@@ -768,6 +793,11 @@ func (rf *Raft) ticker() {
 								rf.nextIndex[i] = rf.getLastLogIndex() + 1
 								rf.matchIndex[i] = 0
 							}
+							rf.Start(ApplyMsg{
+								CommandValid: true,
+								Term:         rf.currentTerm,
+								CommandIndex: rf.getLastLogIndex(),
+							})
 							rf.mu.Unlock()
 							go rf.GoSendAppendEntries()
 							return
